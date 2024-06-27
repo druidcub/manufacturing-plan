@@ -1,0 +1,3027 @@
+<link type="text/css" rel="stylesheet" href="https://unpkg.com/bootstrap/dist/css/bootstrap.min.css"/>
+<link type="text/css" rel="stylesheet" href="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.css"/>
+<script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.js"></script>
+<script src="https://unpkg.com/bootstrap-vue@latest/dist/bootstrap-vue.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.9.3/Chart.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/0.7.0/chartjs-plugin-datalabels.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/keycloak-js@22.0.3/dist/keycloak.min.js"></script>
+
+<head>
+	<link rel="icon" href="assets/header-icon.png">
+	<title>企劃生產報表</title>
+</head>
+<body>
+    <div id="ManufacturingPlan">
+        <img v-if="!isPortal" class="header-logo" src="assets/logo.png">
+
+        <p v-if="!isPortal" class="page-title"  role="button" v-on:click="reloadWithoutParams()">企劃生產報表<span class='spanTextSmall'>{{updateMsg}}</span></p>
+        
+        <!--登入按鈕-->
+        <login-module 
+            :auth-object-array="authObjectArray" 
+            @update-auth="updateUserAuth"
+            @update-portal="updatePortal"
+            @update-user="updateUser">
+
+        </login-module>
+
+        <div class="header">
+            
+        </div>
+
+        <div class="accordion" id="chart-container">
+            <!--圖表區-->
+            <b-card no-body class="mb-1">
+                <b-card-header header-tag="header" class="p-1" role="tab">
+                    <b-button 
+                        block  variant="light"
+                        @click="chartVisible = !chartVisible"
+                        class="accordion-button d-block text-center accordion-button-big-font">
+                        圖表區 {{chartTitle1}}
+                    </b-button>
+                    <b-collapse class="chart-zone" id="accordion-0" :visible="chartVisible" @shown="onChartShown" accordion="my-accordion0" role="tabpanel">
+                        <canvas class="chart" ref="chart1">
+                        </canvas>
+                    </b-collapse>
+                </b-card-header>
+            </b-card>
+        </div>
+
+        <div class="title-bar">
+            <button v-if="isEditAuthed" class="check_button" v-on:click="overtimeCheckProcess()">假日排產通知</button>
+            <button v-if="isEditAuthed" class="check_button" v-on:click="planCheckProcess()">企劃變更通知</button>
+            <button v-on:click="shiftDay(-30)">前一月</button>
+            <button v-on:click="shiftDay(-7)">前一週</button>
+            <button v-on:click="shiftDay(-1)">前一天</button>
+            <div>日期:</div>
+            <input type="date" v-model="searchDate" v-on:change="searchProcess"/>
+            <button v-on:click="shiftDay(0)">手動刷新</button>
+            <button v-on:click="shiftDay(1)">後一天</button>
+            <button v-on:click="shiftDay(7)">後一週</button>
+            <button v-on:click="shiftDay(30)">後一月</button>
+            <button v-if="showChangedButton" class="save_button" v-on:click="writeProcess()">已有內容修改，欲儲存請按此按鈕</button>
+        </div>
+        <div class="title-bar">
+            <template v-for="(item, idx) in functionList">
+                <button :class="{selected_button: idx === selectedFunctionIdx}" v-on:click="functionClick(idx)">{{item}}</button>
+            </template>
+        </div>
+        <div class="title-bar">
+            <template v-for="(item, idx) in productInfo[selectedFunctionIdx]">
+                <button :class="{selected_button: idx === selectedIdx}" v-on:click="productClick(idx)">{{item.name}}</button>
+            </template>
+        </div>
+        <div class="accordion" id="table-container">
+            <!--生產計劃-->
+            <b-card no-body class="mb-1">
+                <b-card-header header-tag="header" class="p-1" role="tab">
+                    <b-button 
+                        block v-b-toggle.accordion-1 variant="light"
+                        class="accordion-button d-block text-center accordion-button-big-font">
+                        生產計劃    {{selectedName}}    {{dateStrings[0]}} - {{dateStrings[dateStrings.length-1]}}
+                    </b-button>
+                </b-card-header>
+                <b-collapse class="delivery-zone" id="accordion-1" visible accordion="my-accordion1" role="tabpanel">
+                    <table class="tg">
+                        <thead class="fix-head">
+                            <tr>
+                                <th>日期</th>
+                                <template v-for="(aDateStr, idx) in dateStrings">
+                                    <th>{{aDateStr}}</th>
+                                </template>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!--(1)最大產能-->
+                            <tr>
+                                <td class="title">(1)最大產能</td>
+                                <template v-for="(aDate, idx) in dates">
+                                    <td class="mytooltip">
+                                        {{perth(manufacturingList[idx]["最大產能"])}}
+                                        <span class="tooltiptext" v-if='manufacturingList[idx]["班次"] === "雙班"'>
+                                            雙班 = 20小時*3600(s/H)*OEE1({{manufacturingList[idx]["理論OEE1"]}}%)/Ct({{manufacturingList[idx]["理論週期"]}}s) = {{perth(Math.round(720*manufacturingList[idx]["理論OEE1"]/manufacturingList[idx]["理論週期"]))}}
+                                        </span>
+                                        <span class="tooltiptext" v-else>
+                                            單班 = 10小時*3600(s/H)*OEE1({{manufacturingList[idx]["理論OEE1"]}}%)/Ct({{manufacturingList[idx]["理論週期"]}}s) = {{perth(Math.round(360*manufacturingList[idx]["理論OEE1"]/manufacturingList[idx]["理論週期"]))}}
+                                        </span>
+                                        <!--
+                                        <span class="tooltiptext" v-if='manufacturingList[idx]["負荷時間"]===0'>
+                                            負荷時間為0(無生產記錄)，顯示數值為24小時生產的最大產能
+                                        </span>
+                                        <span class="tooltiptext" v-else>
+                                            負荷時間({{perth(manufacturingList[idx]["負荷時間"])}} 秒) / 3600 * UPH理論值({{perth(manufacturingList[idx]["UPH理論值"])}}) = {{perth(manufacturingList[idx]["最大產能"])}}
+                                        </span>
+                                        -->
+                                        
+                                    </td>
+                                </template>
+                            </tr>
+                            <!--(2)產能利用率%-->
+                            <tr>
+                                <td class="title">(2)產能利用率%</td>
+                                <template v-for="(aDate, idx) in dates">
+                                    <td class="mytooltip">
+                                        <template v-if="manufacturingList[idx]['最大產能'] > 0">
+                                            {{availability_rate(idx)}}
+                                            <span class="tooltiptext">
+                                                產能利用率 = 企劃排產({{perth(manufacturingList[idx]["排定生產量"])}})/最大產能({{perth(manufacturingList[idx]["最大產能"])}}) = {{(manufacturingList[idx]["排定生產量"]/manufacturingList[idx]["最大產能"]*100).toFixed(2)+"%"}}
+                                            </span>
+                                            <!--
+                                            <span class="tooltiptext">
+                                                實際生產量({{perth(manufacturingList[idx]["實際生產量"])}}) / 最大產能({{perth(manufacturingList[idx]["最大產能"])}}) = {{(manufacturingList[idx]["實際生產量"]/manufacturingList[idx]["最大產能"]*100).toFixed(2)+"%"}}
+                                            </span>
+                                            -->
+                                        </template>
+                                        <template v-else>
+                                            0
+                                        </template>
+                                    </td>
+                                </template>
+                            </tr>
+                            <!--(3)排定生產量-->
+                            <tr>
+                                <td class="title">(3)排定生產量</td>
+                                <!--
+                                <td  class="mytooltip" v-for="(aDate, idx) in dates" :key="idx">
+                                    {{perth(manufacturingList[idx]["排定生產量"])}}
+                                    <span v-if="isEditAuthed" class="tooltiptext">
+                                        <button @click="editValueModal(idx, '排定生產量')">編輯排定生產量</button>
+                                    </span>
+                                </td>                                
+                                -->
+                                <td v-for="(aDate, idx) in dates" :key="idx">
+                                    <input v-if="isEditAuthed" :class="{changed: changeCheck(2,idx)}" type="text" :id='"input_"+idx+"_"+"排定生產量"' :value='perth(manufacturingList[idx]["排定生產量"])' @input='inputToThousand2(idx, "排定生產量")'/>
+                                    <template v-else>
+                                        {{perth(manufacturingList[idx]["排定生產量"])}}
+                                    </template>
+                                </td>
+                            </tr>
+                            <!--(4)良品生產量-->
+                            <tr>
+                                <td class="title">(4)良品生產量</td>
+                                <template v-for="(aDate, idx) in dates">
+                                    <td :class='{"pointer": selectedLineID !== 0}' v-on:click="showScadaTable(aDate)">
+                                        {{perth(manufacturingList[idx]["良品生產量"])}}
+                                    </td>
+                                </template>
+                            </tr>
+                            <!--(5)入庫量-->
+                            <tr>
+                                <td class="title">(5)入庫量</td>
+                                <td v-for="(aDate, idx) in dates" :key="idx">{{perth(manufacturingList[idx]["入庫量"])}}</td>
+                            </tr>
+                            <!--(6)達成率%-->
+                            <tr>
+                                <td class="title"><button class="table-button" v-on:click="showChart(1)">(6)達成率%</button></td>
+                                <td v-for="(aDate, idx) in dates" :key="idx"
+                                    :class='{"mytooltip": true, "red-font": achievement_rate_is_red(idx),"green-font": achievement_rate_is_green(idx)}'>
+                                    {{achievement_rate(idx)}}
+                                    <span style="text-align: left;padding-left: 1vw;" v-if="achievement_rate_description(idx)!==''" class="tooltiptext" v-html="achievement_rate_description(idx)">
+                                    </span>
+                                </td>
+                            </tr>
+                            <!--(7)欠產累積量-->
+                            <tr>
+                                <td class="title">(7)欠產累積量</td>
+                                <td v-for="(aDate, idx) in dates" :key="idx"
+                                class="mytooltip"
+                                :class='{"red-font": (production_diff_acc(idx) < 0)}'>
+                                    {{perth(production_diff_acc(idx))}}
+                                    <span v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].production_real !== undefined) || isEditAuthed" class="tooltiptext">
+                                        <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].production_real !== undefined)">
+                                            重置後累積量：{{manufacturingList[idx]['區間重置明細'].production_real.offset}}
+                                            <br>
+                                            編輯人員：{{manufacturingList[idx]['區間重置明細'].production_real.creator}}
+                                            <br>
+                                            備註：{{manufacturingList[idx]['區間重置明細'].production_real.remark}}
+                                        </template>
+                                        <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].production_real !== undefined) && isEditAuthed">
+                                            <br>
+                                        </template>
+                                        <template v-if="isEditAuthed">
+                                            <button @click="editValueModal(idx, '欠產累積量')">編輯欠產累積量</button>
+                                            <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].production_real !== undefined)">
+                                                <button @click="editValueModal(idx, '刪除欠產累積量')">刪除欠產累積量</button>
+                                            </template>
+                                        </template>
+                                    </span>
+                                </td>
+                            </tr>
+                            <!--(8)庫存趨勢燈號-->
+                            <tr>
+                                <td class="title">
+                                    (8)庫存趨勢燈號
+                                    <div style="display: flex; justify-content: flex-end;">
+                                        <span class="yellow_light_big">低</span>
+                                        <span class="green_light_big">&nbsp;</span>
+                                        <span class="red_light_big">高</span>
+                                    </div>
+                                </td>
+                                
+                                <template v-for="(aDate, idx) in dates">
+                                    <td class="mytooltip">
+                                        <!--系統庫存數-出貨計畫量，>5個工作天的排定生產量，紅燈
+                                                        >= 2 && < 5，綠燈
+                                                        低於2個工作天，黃燈
+                                            例如，排定生產量為1萬，下水位就是2萬，上水位為5萬(5工作天)
+                                        -->
+                                        <span :class="potential_light_class(idx)"></span>
+                                        <span class="tooltiptext">
+                                            <span :class="potential_light_class(idx)"></span> {{potential_light_description(idx)}}
+                                        </span>
+                                    </td>
+                                </template>
+                            </tr>
+
+                            <!--(8)庫存趨勢燈號-->
+                            <tr>
+                                <td class="title">
+                                    (9)庫齡趨勢燈號
+                                    <div style="display: flex; justify-content: flex-end;">
+                                        <span class="green_light_big">&le;15</span>
+                                        <span class="yellow_light_big">&le;30</span>
+                                        <span class="red_light_big">&gt;30</span>
+                                    </div>
+                                </td>
+                                
+                                <template v-for="(aDate, idx) in dates">
+                                    <td class="mytooltip">
+                                        <!--系統庫存數-出貨計畫量，>5個工作天的排定生產量，紅燈
+                                                        >= 2 && < 5，綠燈
+                                                        低於2個工作天，黃燈
+                                            例如，排定生產量為1萬，下水位就是2萬，上水位為5萬(5工作天)
+                                        -->
+                                        <span :class="shipping_age_light_class(idx)"></span>
+                                        <span class="tooltiptext">
+                                            <span :class="shipping_age_light_class(idx)"></span> {{shipping_age_light_description(idx)}}
+                                            <div v-if="system_stock_acc(idx) > 0 && manufacturingList[idx]['庫齡明細'] !== undefined && manufacturingList[idx]['庫齡明細'].records !== undefined && manufacturingList[idx]['庫齡明細'].records.length > 0">
+                                                {{manufacturingList[idx]['庫齡明細'].recordDate.slice(0,10).replace(/-/g,'/')}}出貨明細
+                                                <div style="text-align: left;">
+                                                    <template v-for="(aInfo, infoIdx) in manufacturingList[idx]['庫齡明細'].records">
+                                                        <br>
+                                                        {{aInfo.update_date.slice(11, 19)}}: {{perth(aInfo.quantity)}} ({{aInfo.transaction_type}})
+                                                    </template>
+                                                </div>
+                                            </div>
+                                        </span>
+                                    </td>
+                                </template>
+                            </tr>
+                        </tbody>
+                    </table>
+                </b-collapse>
+            </b-card>
+            <!--交貨計劃-->
+            <b-card no-body class="mb-1">
+                <b-card-header header-tag="header" class="p-1" role="tab">
+                    <b-button 
+                        block v-b-toggle.accordion-2 variant="light"
+                        class="accordion-button d-block text-center accordion-button-big-font">
+                        交貨計劃    {{selectedName}}    {{dateStrings[0]}} - {{dateStrings[dateStrings.length-1]}}
+                    </b-button>
+                </b-card-header>
+                <b-collapse class="delivery-zone" id="accordion-2" visible accordion="my-accordion2" role="tabpanel">
+                    <table class="tg">
+                        <thead class="fix-head">
+                            <tr>
+                                <th>日期</th>
+                                <template v-for="(aDateStr, idx) in dateStrings">
+                                    <th>{{aDateStr}}</th>
+                                </template>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!--(1)系統庫存數-->
+                            <tr>
+                                <td class="title">(1)系統庫存數</td>
+                                <td class="mytooltip" v-for="(aDate, idx) in dates" :key="idx">
+                                    {{perth(system_stock_acc(idx))}}
+                                    <span v-if="manufacturingList[idx] !== undefined && manufacturingList[idx]['庫存明細']!==undefined" class="tooltiptext">
+                                        本日交易明細
+                                        <div style="text-align: left;">
+                                            <template v-if="manufacturingList[idx]['庫存明細'].length > 0">
+                                                <template v-for="(aInfo, infoIdx) in manufacturingList[idx]['庫存明細']">
+                                                    <br>
+                                                    {{aInfo.update_date.slice(11, 19)}}: {{perth(aInfo.quantity)}} ({{aInfo.transaction_type}})
+                                                </template>
+                                            </template>
+                                            <template v-else>
+                                                無
+                                            </template>
+                                        </div>
+                                        
+                                    </span>
+                                </td>
+                            </tr>
+                            <!--庫存水位燈號先拿掉
+                            <tr>
+                                <td class="title">
+                                    (2)庫存水位燈號
+                                    <div style="display: flex; justify-content: flex-end;">
+                                        <span class="yellow_light_big">低</span>
+                                        <span class="green_light_big">&nbsp;</span>
+                                        <span class="red_light_big">高</span>
+                                    </div>
+                                </td>
+                                
+                                <template v-for="(aDate, idx) in dates" :key="idx">
+                                    <td class="mytooltip">
+                                            --累計庫存數，>5個工作天的排定生產量，灰燈
+                                            --            >= 3 && < 5，綠燈
+                                            --            低於3個工作天，橘燈
+                                            --例如，排定生產量為1萬，下水位就是3萬，上水位為5萬(5工作天)
+                                        
+                                        <span :class="production_light_class(idx)"></span>
+                                        <span class="tooltiptext">
+                                            <span :class="production_light_class(idx)"></span> {{production_light_description(idx)}}
+                                        </span>
+                                        
+                                            --累計庫存數，>10個工作天的排定生產量，紅燈
+                                            --            >= 5 && <= 10，綠燈
+                                            --            低於5個工作天，橘燈
+                                            --例如，排定生產量為1萬，最低水位就是5萬，高水位為10萬(5工作天)
+                                        
+                                        --<span v-if='system_stock_acc(idx) > manufacturingList[idx]["水位基礎值"]*10' class="red_light"></span>
+                                        --<span v-else-if='system_stock_acc(idx) > manufacturingList[idx]["水位基礎值"]*3' class="green_light"></span>
+                                        --<span v-else-if='system_stock_acc(idx) >= manufacturingList[idx]["水位基礎值"]*0' class="orange_light"></span>
+                                        --<span v-else class="red_light"></span>
+                                        --<span class="tooltiptext">
+                                        --    系統庫存數({{system_stock_acc(idx)}}) / 水位基礎值({{perth(manufacturingList[idx]["水位基礎值"])}}) = {{manufacturingList[idx]["水位基礎值"]>0?Math.round(system_stock_acc(idx)/manufacturingList[idx]["水位基礎值"]):">10"}} 天水位
+                                        --</span>
+                                    </td>
+                                </template>
+                            </tr>
+                            -->
+                            <!--(2)出貨計畫數量-->
+                            <tr>
+                                <td class="title">(2)出貨計畫數量</td>
+                                <!--
+                                <td  class="mytooltip" v-for="(aDate, idx) in dates" :key="idx">
+                                    {{perth(manufacturingList[idx]["出貨計畫數量"])}}
+                                    <span v-if="isEditAuthed" class="tooltiptext">
+                                        <button @click="editValueModal(idx, '出貨計畫數量')">編輯出貨計畫數量</button>
+                                    </span>
+                                </td>
+                                -->
+                                <td v-for="(aDate, idx) in dates" :key="idx">
+                                    <input v-if="isEditAuthed" :class="{changed: changeCheck(3,idx)}" type="text" :id='"input_"+idx+"_"+"出貨計畫數量"' :value='perth(manufacturingList[idx]["出貨計畫數量"])' @input='inputToThousand2(idx, "出貨計畫數量")'/>
+                                    <template v-else>
+                                        {{perth(manufacturingList[idx]["出貨計畫數量"])}}
+                                    </template>
+                                </td>
+                            </tr>
+                            <!--(3)實際出貨數量-->
+                            <tr>
+                                <td class="title">(3)實際出貨數量</td>
+                                <td v-for="(aDate, idx) in dates" :key="idx" :class='{"red-font": manufacturingList[idx]["實際出貨數量"] < 0}'>{{perth(manufacturingList[idx]["實際出貨數量"])}}</td>
+                                
+                                <!--<td v-for="(aDate, idx) in dates" :key="idx">
+                                    <input :class="{changed: changeCheck(4,idx)}" type="text" :id='"input_"+idx+"_"+"實際出貨數量"' :value='perth(manufacturingList[idx]["實際出貨數量"])' @input='inputToThousand2(idx, "實際出貨數量")'/>
+                                </td>-->
+                            </tr>
+                            <!--累積出貨差異-->
+                            <tr>
+                                <td class="title">
+                                    <button class="table-button" v-on:click="showChart(2)">(4)累積出貨差異</button>
+                                    <button v-if="shippingCollapse"   class="btn btn-primary btn-circle mx-1" @click="shippingCollapse = !shippingCollapse">
+                                        <svg xmlns="http://www.w3.org/2000/svg" height="16" width="10" viewBox="0 0 320 512"><path fill="#ffffff" d="M143 256.3L7 120.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 33.9 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 33.9 0L313 86.3c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.4 9.5-24.6 9.5-34 .1zm34 192l136-136c9.4-9.4 9.4-24.6 0-33.9l-22.6-22.6c-9.4-9.4-24.6-9.4-33.9 0L160 352.1l-96.4-96.4c-9.4-9.4-24.6-9.4-33.9 0L7 278.3c-9.4 9.4-9.4 24.6 0 33.9l136 136c9.4 9.5 24.6 9.5 34 .1z"/></svg>
+                                    </button>
+                                    <button v-else                                      class="btn btn-danger btn-circle mx-1"  @click="shippingCollapse = !shippingCollapse">
+                                        <svg xmlns="http://www.w3.org/2000/svg" height="16" width="10" viewBox="0 0 320 512"><path fill="#ffffff" d="M177 255.7l136 136c9.4 9.4 9.4 24.6 0 33.9l-22.6 22.6c-9.4 9.4-24.6 9.4-33.9 0L160 351.9l-96.4 96.4c-9.4 9.4-24.6 9.4-33.9 0L7 425.7c-9.4-9.4-9.4-24.6 0-33.9l136-136c9.4-9.5 24.6-9.5 34-.1zm-34-192L7 199.7c-9.4 9.4-9.4 24.6 0 33.9l22.6 22.6c9.4 9.4 24.6 9.4 33.9 0l96.4-96.4 96.4 96.4c9.4 9.4 24.6 9.4 33.9 0l22.6-22.6c9.4-9.4 9.4-24.6 0-33.9l-136-136c-9.2-9.4-24.4-9.4-33.8 0z"/></svg>
+                                    </button>
+                                    
+                                </td>
+                                <td v-for="(aDate, idx) in dates" :key="idx" :class='{"red-font": ship_diff_acc(idx) < 0}'>
+                                    {{perth(ship_diff_acc(idx))}}
+                                </td>
+                            </tr>
+                            <template v-if="!shippingCollapse">
+                                <!--(5)出貨計畫累計數量-->
+                                <tr>
+                                    <td class="title">&emsp;&emsp;出貨計畫累計數量</td>
+                                    <td v-for="(aDate, idx) in dates" :key="idx" 
+                                        class="mytooltip"
+                                        :class='{"red-font": ship_target_acc(idx) < 0}'>
+                                        {{perth(ship_target_acc(idx))}}
+                                        <span v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_target !== undefined) || isEditAuthed" class="tooltiptext">
+                                            <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_target !== undefined)">
+                                                重置後累積量：{{manufacturingList[idx]['區間重置明細'].ship_target.offset}}
+                                                <br>
+                                                編輯人員：{{manufacturingList[idx]['區間重置明細'].ship_target.creator}}
+                                                <br>
+                                                備註：{{manufacturingList[idx]['區間重置明細'].ship_target.remark}}
+                                            </template>
+                                            <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_target !== undefined) && isEditAuthed">
+                                                <br>
+                                            </template>
+                                            <template v-if="isEditAuthed">
+                                                <button @click="editValueModal(idx, '出貨計畫累計數量')">編輯出貨計畫累計數量</button>
+                                                <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_target !== undefined)">
+                                                    <button @click="editValueModal(idx, '刪除出貨計畫累計數量')">刪除出貨計畫累計數量</button>
+                                                </template>
+                                            </template>
+                                        </span>
+                                    </td>
+                                </tr>
+                                <!--(6)實際出貨累積數量-->
+                                <tr>
+                                    <td class="title"><button class="table-button" v-on:click="showChart(3)">&emsp;&emsp;實際出貨累積數量</button></td>
+                                    <td v-for="(aDate, idx) in dates" :key="idx"
+                                        class="mytooltip"
+                                        :class='{"red-font": ship_real_acc(idx) < 0}'>
+                                        {{perth(ship_real_acc(idx))}}
+                                        <span v-if="manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_real !== undefined" class="tooltiptext">
+                                            重置後累積量：{{manufacturingList[idx]['區間重置明細'].ship_real.offset}}
+                                            <br>
+                                            編輯人員：{{manufacturingList[idx]['區間重置明細'].ship_real.creator}}
+                                            <br>
+                                            備註：{{manufacturingList[idx]['區間重置明細'].ship_real.remark}}
+                                        </span>
+                                        <span v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_real !== undefined) || isEditAuthed" class="tooltiptext">
+                                            <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_real !== undefined)">
+                                                重置後累積量：{{manufacturingList[idx]['區間重置明細'].ship_real.offset}}
+                                                <br>
+                                                編輯人員：{{manufacturingList[idx]['區間重置明細'].ship_real.creator}}
+                                                <br>
+                                                備註：{{manufacturingList[idx]['區間重置明細'].ship_real.remark}}
+                                            </template>
+                                            <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_real !== undefined) && isEditAuthed">
+                                                <br>
+                                            </template>
+                                            <template v-if="isEditAuthed">
+                                                <button @click="editValueModal(idx, '實際出貨累積數量')">編輯實際出貨累積數量</button>
+                                                <template v-if="(manufacturingList[idx]['區間重置明細'] !== undefined && manufacturingList[idx]['區間重置明細'].ship_real !== undefined)">
+                                                    <button @click="editValueModal(idx, '刪除實際出貨累積數量')">刪除實際出貨累積數量</button>
+                                                </template>
+                                            </template>
+                                        </span>
+                                    </td>
+                                </tr>
+                            </template>
+
+                        </tbody>
+                    </table>
+                </b-collapse>
+            </b-card>
+            <!--物料狀況-->
+            <b-card no-body class="mb-1">
+                <b-card-header header-tag="header" class="p-1" role="tab">
+                    <b-button 
+                        block v-b-toggle.accordion-3 variant="light"
+                        class="accordion-button d-block text-center accordion-button-big-font">
+                        物料狀況    {{selectedName}}    {{dateStrings[0]}} - {{dateStrings[dateStrings.length-1]}}
+                    </b-button>
+                </b-card-header>
+                
+                
+                <b-collapse class="delivery-zone" id="accordion-3" visible accordion="my-accordion3" role="tabpanel">
+                    <table class="tg">
+                        <thead class="fix-head">
+                            <tr>
+                                <th>日期</th>
+                                <template v-for="(aDateStr, idx) in dateStrings">
+                                    <th>{{aDateStr}}</th>
+                                </template>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template v-if="componentObj !== null" v-for="(typeStr, t_idx) in componentTypeList">
+                                <tr v-if="partNumbersWithType(typeStr).length > 0">
+                                    <td class="material-title" colspan="8">{{typeStr}}</td>
+                                </tr>
+                                <template v-for="(aPartNumber, r_idx) in partNumbersWithType(typeStr)">
+                                    <!--料號/庫存-A-->
+                                    <tr class="material-quantity">
+                                        <td class="title">
+                                            <span class="mytooltip">
+                                                {{aPartNumber}}
+                                                <span class="tooltiptext">
+                                                    <div style="text-align: left;">
+                                                        <b>品名：</b>{{componentObj[aPartNumber].description}}
+                                                        <br>
+                                                        <b>單位：</b>{{componentObj[aPartNumber].unit}}
+                                                        <br>
+                                                        <b>供應商：</b>{{componentObj[aPartNumber].supplier}}
+                                                    </div>
+                                                </span>
+                                            </span>
+                                            <button v-if="componentObj[aPartNumber].collapse"   class="btn btn-primary btn-circle mx-1" @click="componentCollapse(aPartNumber, false)">
+                                                <svg xmlns="http://www.w3.org/2000/svg" height="16" width="10" viewBox="0 0 320 512"><path fill="#ffffff" d="M143 256.3L7 120.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 33.9 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 33.9 0L313 86.3c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.4 9.5-24.6 9.5-34 .1zm34 192l136-136c9.4-9.4 9.4-24.6 0-33.9l-22.6-22.6c-9.4-9.4-24.6-9.4-33.9 0L160 352.1l-96.4-96.4c-9.4-9.4-24.6-9.4-33.9 0L7 278.3c-9.4 9.4-9.4 24.6 0 33.9l136 136c9.4 9.5 24.6 9.5 34 .1z"/></svg>
+                                            </button>
+                                            <button v-else                                      class="btn btn-danger btn-circle mx-1"  @click="componentCollapse(aPartNumber, true)">
+                                                <svg xmlns="http://www.w3.org/2000/svg" height="16" width="10" viewBox="0 0 320 512"><path fill="#ffffff" d="M177 255.7l136 136c9.4 9.4 9.4 24.6 0 33.9l-22.6 22.6c-9.4 9.4-24.6 9.4-33.9 0L160 351.9l-96.4 96.4c-9.4 9.4-24.6 9.4-33.9 0L7 425.7c-9.4-9.4-9.4-24.6 0-33.9l136-136c9.4-9.5 24.6-9.5 34-.1zm-34-192L7 199.7c-9.4 9.4-9.4 24.6 0 33.9l22.6 22.6c9.4 9.4 24.6 9.4 33.9 0l96.4-96.4 96.4 96.4c9.4 9.4 24.6 9.4 33.9 0l22.6-22.6c9.4-9.4 9.4-24.6 0-33.9l-136-136c-9.2-9.4-24.4-9.4-33.8 0z"/></svg>
+                                            </button>
+                                            
+                                        </td>
+                                        
+                                        <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                            {{perth((componentObj[aPartNumber].quantities[c_idx]).toFixed(0))}}
+                                            <span v-if="componentObj[aPartNumber].component_detail !== undefined && componentObj[aPartNumber].component_detail[c_idx] !== undefined" class="tooltiptext">
+                                                本日交易明細
+                                                <div style="text-align: left;">
+                                                    <template v-if="componentObj[aPartNumber].component_detail[c_idx].length > 0">
+                                                        <template v-for="(aDetail, detailIdx) in componentObj[aPartNumber].component_detail[c_idx]">
+                                                            <br>
+                                                            {{aDetail.update_date.slice(11, 19)}}: {{perth(aDetail.quantity)}} ({{aDetail.transaction_type}})
+                                                        </template>
+                                                    </template>
+                                                    <template v-else>
+                                                        無
+                                                    </template>
+                                                </div>
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    <!--預設收折的項目(L/T、BOM用量、標準損耗、實際損耗、平均損耗)-->
+                                    <template v-if="!componentObj[aPartNumber].collapse">
+                                        <!--L/T-->
+                                        <tr class="material-day">
+                                            <td class="title">&emsp;&emsp;L/T</td>
+
+                                            <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                                {{componentObj[aPartNumber].new_lead_time}}天
+                                            </td>
+                                        </tr>
+                                        <!--BOM用量-->
+                                        <tr class="material-day">
+                                            <td class="title">&emsp;&emsp;BOM用量</td>
+
+                                            <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                                <template v-if="componentObj[aPartNumber].work_order_detail !== undefined">
+                                                    {{componentObj[aPartNumber].work_order_detail[0].QuantityPerAssembly}}
+                                                </template>
+                                            </td>
+                                        </tr>
+                                        <!--標準消耗-->
+                                        <tr class="material-day">
+                                            <td class="title">&emsp;&emsp;標準消耗</td>
+
+                                            <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                                3%
+                                            </td>
+                                        </tr>
+                                        <!--實際消耗-->
+                                        <tr class="material-day">
+                                            <td class="title">&emsp;&emsp;實際消耗</td>
+
+                                            <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                                <template v-if="componentObj[aPartNumber].work_order_detail !== undefined">
+                                                    <span v-if="componentObj[aPartNumber].work_order_byDay[c_idx] !== undefined && componentObj[aPartNumber].work_order_byDay[c_idx].length > 0" 
+                                                        :class='{"red-font": componentObj[aPartNumber].loss_ratio[c_idx] > 3, "green-font": componentObj[aPartNumber].loss_ratio[c_idx] <= 3}'>
+                                                        {{componentObj[aPartNumber].loss_ratio[c_idx]}}%
+                                                    </span>
+                                                    <span v-else>
+                                                        0
+                                                    </span>
+                                                    
+                                                    <span v-if="componentObj[aPartNumber].work_order_byDay[c_idx] !== undefined && componentObj[aPartNumber].work_order_byDay[c_idx].length > 0" 
+                                                        class="tooltiptext" style="width: 25vw;">
+                                                        工單明細
+                                                        <br>
+                                                        <div v-for="item in componentObj[aPartNumber].work_order_byDay[c_idx]">
+                                                            工單號{{item.WorkNumber}}({{item.StartDate.slice(0,10).replace(/-/g,'/')}})
+                                                        </div>
+                                                        合計已使用數{{componentObj[aPartNumber].quantity_issued[c_idx]}}，應使用數{{Math.round(componentObj[aPartNumber].quantity_used[c_idx]*10000)/10000}}
+                                                    </span>
+                                                </template>
+                                            </td>
+                                        </tr>
+                                        <!--平均消耗-->
+                                        <tr class="material-day">
+                                            <td class="title">&emsp;&emsp;平均消耗</td>
+
+                                            <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                                <template v-if="componentObj[aPartNumber].work_order_detail !== undefined">
+                                                    {{componentObj[aPartNumber].loss_ratio_2WK}}%
+                                                    <span v-if="componentObj[aPartNumber].work_order_2WK !== undefined && componentObj[aPartNumber].work_order_2WK.length > 0" 
+                                                        class="tooltiptext" style="width: 25vw;">
+                                                        工單明細
+                                                        <br>
+                                                        <div v-for="item in componentObj[aPartNumber].work_order_2WK">
+                                                            工單號{{item.WorkNumber}}({{item.StartDate.slice(0,10).replace(/-/g,'/')}})
+                                                        </div>
+                                                        合計已使用數{{componentObj[aPartNumber].quantity_issued_2WK}}，應使用數{{Math.round(componentObj[aPartNumber].quantity_used_2WK*10000)/10000}}
+                                                    </span>
+                                                </template>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    
+                                    <!--可用天數-->
+                                    <tr class="material-day">
+                                        <td class="title">&emsp;&emsp;可用天數</td>
+
+                                        <td v-for="(aDate, c_idx) in dates" :key="c_idx" class="mytooltip">
+                                            {{allow_product_days(aPartNumber, c_idx)}}
+                                            <span v-if='production_target_nonzero(c_idx) > 0' class="tooltiptext">
+                                                <template v-if="componentObj[aPartNumber].loss_ratio_2WK !== undefined">
+                                                    物料總數({{perth((componentObj[aPartNumber].quantities[c_idx]).toFixed(0))}})/組成用量({{componentObj[aPartNumber].quantity_per_assembly}})/{{Math.round(100+componentObj[aPartNumber].loss_ratio_2WK)/100}}({{componentObj[aPartNumber].loss_ratio_2WK}}%耗損率)/排定生產量({{perth(production_target_nonzero(c_idx))}}) = {{allow_product_days(aPartNumber, c_idx)}} 天
+                                                </template>
+                                                <template v-else>
+                                                    物料總數({{perth((componentObj[aPartNumber].quantities[c_idx]).toFixed(0))}})/組成用量({{componentObj[aPartNumber].quantity_per_assembly}})/1.03(3%耗損率)/排定生產量({{perth(production_target_nonzero(c_idx))}}) = {{allow_product_days(aPartNumber, c_idx)}} 天
+                                                </template>                                                
+                                            </span>
+                                            <span v-else class="tooltiptext">
+                                                無排產量參考
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    <!--水位燈號-->
+                                    <tr class="material-day">
+                                        <td class="title">
+                                            &emsp;&emsp;水位燈號
+                                        </td>
+                                        
+                                        <td v-for="(aDate, c_idx2) in dates" class="mytooltip">
+                                            <span :class="component_light_class(aPartNumber, c_idx2)"></span>
+                                            <span class="tooltiptext">
+                                                <span :class="component_light_class(aPartNumber, c_idx2)"></span> {{component_light_description(aPartNumber, c_idx2)}}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </template>
+                        </tbody>
+                    </table>
+                </b-collapse>
+            </b-card>
+        </div>
+
+        <!--對話框(修改數值)-->
+        <b-modal id="modal-edit-value"
+            centered 
+            header-bg-variant="costom-modal"
+            body-bg-variant="costom-modal"
+            :title="editInfo.title"
+            @ok="editProcess()"
+        >
+            <template #modal-footer="{ cancel, ok}">
+                <b-button  @click="cancel()">
+                    取消
+                </b-button>
+                <b-button variant="primary" @click="ok()">
+                    {{editInfo.isDelete?"刪除":"修改"}}
+                </b-button>
+            </template>
+            <template v-if="editInfo.idx !== undefined">
+                <template v-if="editInfo.isDelete">
+                    是否<b>{{editInfo.key}}</b>{{perth(editInfo.value_record)}}？
+                    <br>
+                    <b>編輯人員：</b>{{editInfo.creator}}
+                </template>
+                <template v-else>
+                    <b>目前數值：</b>{{perth(editInfo.value_record)}}
+                    <br>
+                    <b>修改數值：</b>
+                    <input type="text" :id='"input_"+editInfo.idx+"_"+editInfo.key' :value='perth(editInfo.value)'   @input='inputToThousand(editInfo.idx, editInfo.key)'/>
+                    <template v-if="editInfo.withEditDetail">
+                        <br>
+                        <b>編輯人員：</b>{{editInfo.creator}}
+                        <br>
+                        <b>備註：</b><b-input type="text" v-model="editInfo.remark"></b-input>
+                    </template>
+                </template>
+                
+            </template>
+        </b-modal>
+
+        <!--
+        <div class="footer">
+            <span style="cursor: pointer;" @click="showVersion">version: {{version}}</span>
+        </div>
+        -->
+        <!--版本模組-->
+        <version-module
+            :version="version" 
+            :version-history="versionHistory"
+            >
+        </version-module>
+    </div>
+</body>
+
+<script src="components/loginModule.js"></script>
+<script src="components/versionModule.js"></script>
+<script>
+    var app = new Vue({
+        el: '#ManufacturingPlan',
+    //Vue.createApp({
+        
+        data(){
+            return {
+                updatedAt: 0,
+				updateMsg: "資料同步中…",
+                functionList: ["機能1","機能2","機能3","機能4"],
+                productInfo:[
+                    [
+                        {
+                            name: "機能1-產品1",
+                            partNumber: "PN-0PN-1234",
+                            lineID: 1106,
+                        },
+                        {
+                            name: "機能1-產品2",
+                            partNumber: "PN-0PN-1235",
+                            lineID: 1245,
+                        },
+                        {
+                            name: "機能1-產品3",
+                            partNumber: "PN-1PN-1236",
+                            lineID: 1245,
+                        },
+                        {
+                            name: "機能1-產品4",
+                            partNumber: "PN-0PN-1237",
+                            lineID: 1254,
+                        },
+                        {
+                            name: "機能1-產品5",
+                            partNumber: "PN-0PN-1238",
+                            lineID: 1258,
+                        },
+                        {
+                            name: "機能1-產品6",
+                            partNumber: "PN-0PN-1239",
+                            lineID: 1256,
+                        },
+                        {
+                            name: "機能1-產品7",
+                            partNumber: "PN-0PN-1240",
+                            lineID: 1854,
+                        },
+                        {
+                            name: "機能1-產品8",
+                            partNumber: "PN-0PN-1241",
+                            lineID: 1847,
+                        },
+                    ],
+                    [
+                        {
+                            name: "機能2-產品1",
+                            partNumber: "PN-0026-1110",
+                            lineID: 1121,
+                        },
+                        {
+                            name: "機能2-產品2",
+                            partNumber: "PN-0026-1111",
+                            lineID: 1120,
+                        },
+                        {
+                            name: "機能2-產品3",
+                            partNumber: "PN-0001-1112",
+                            lineID: 1560,
+                        },
+                        {
+                            name: "機能2-產品4",
+                            partNumber: "PN-0001-1113",
+                            lineID: 1119,
+                        },
+                        {
+                            name: "機能2-產品5",
+                            partNumber: "PN-0002-1114",
+                            lineID: 1118,
+                        },
+                        {
+                            name: "機能2-產品6",
+                            partNumber: "PN-0040-1115",
+                            lineID: 1853,
+                        },
+                        {
+                            name: "機能2-產品7",
+                            partNumber: "PN-0040-1116",
+                            lineID: 1219,
+                        },
+                    ],
+                    [
+                        {
+                            name: "機能3-產品1",
+                            partNumber: "PN-000Y-1310",
+                            lineID: 1877,
+                        },
+                        {
+                            name: "機能3-產品2",
+                            partNumber: "PN-000Y-1311",
+                            lineID: 1878,
+                        },
+                        {
+                            name: "機能3-產品3",
+                            partNumber: "PN-100U-1312",
+                            lineID: 1879,
+                        },
+                        {
+                            name: "機能3-產品4",
+                            partNumber: "PN-1001-1313",
+                            lineID: 1882,
+                        },
+                        {
+                            name: "機能3-產品5",
+                            partNumber: "PN-0002-1314",
+                            lineID: 1883,
+                        },
+                        {
+                            name: "機能3-產品6",
+                            partNumber: "PN-000Y-1315",
+                            lineID: 1880,
+                        },
+                        {
+                            name: "機能3-產品7",
+                            partNumber: "PN-000Y-1316",
+                            lineID: 1881,
+                        },
+                    ],
+                    [
+                        {
+                            name: "機能4-產品1", 
+                            partNumber: "PN-2561-1510",
+                            lineID: 924,
+                        },
+                        {
+                            name: "機能4-產品2", 
+                            partNumber: "PN-D0332-1511",
+                            lineID: 80,
+                        },
+                        {
+                            name: "機能4-產品3", 
+                            partNumber: "PN-D0332-1512",
+                            lineID: 82,
+                        },
+                        {
+                            name: "機能4-產品4", 
+                            partNumber: "PN-F020-1513",
+                            lineID: 934,
+                        },
+                        {
+                            name: "機能4-產品5", 
+                            partNumber: "PN-01001-1514",
+                            lineID: 1841,
+                        },
+                        {
+                            name: "機能4-產品6",
+                            partNumber: "PN-04300-1515",
+                            lineID: 412,
+                        },
+                        {
+                            name: "機能4-產品7",
+                            partNumber: "PN-04301-1516",
+                            lineID: 903,
+                        },
+                    ],
+                ],
+                dates: ["2023-08-08", "2023-08-09","2023-08-10","2023-08-11","2023-08-12", "2023-08-13"],
+                manufacturingList:[{"日期":"2023-09-18","水位基礎值":"1","負荷時間":27334,"稼動時間":23827,"UPH理論值":2846,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":103.08,"排定生產量":20800,"實際生產量":22275,"入庫量":36400,"系統庫存數":36400,"出貨計畫數量":1000,"實際出貨數量":2000,"實際庫存增量":36400,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[{"quantity":18200,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-18T00:00:00.000Z","update_date":"2023-09-18T14:42:03.000Z"},{"quantity":18200,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-18T00:00:00.000Z","update_date":"2023-09-18T17:57:41.000Z"}]},{"日期":"2023-09-19","水位基礎值":"1","負荷時間":27247,"稼動時間":26192,"UPH理論值":2846,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":99.25,"排定生產量":20800,"實際生產量":21378,"入庫量":20800,"系統庫存數":20800,"出貨計畫數量":2000,"實際出貨數量":1000,"實際庫存增量":20800,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[{"quantity":20800,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-19T00:00:00.000Z","update_date":"2023-09-19T13:25:00.000Z"}]},{"日期":"2023-09-20","水位基礎值":"1","負荷時間":27371,"稼動時間":23780,"UPH理論值":2846,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":101.13,"排定生產量":20800,"實際生產量":21882,"入庫量":20800,"系統庫存數":20800,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":20800,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[{"quantity":20800,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-20T00:00:00.000Z","update_date":"2023-09-20T15:08:59.000Z"}]},{"日期":"2023-09-21","水位基礎值":"1","負荷時間":27129,"稼動時間":24616,"UPH理論值":2846,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":103.71,"排定生產量":20800,"實際生產量":22243,"入庫量":0,"系統庫存數":0,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":0,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[]},{"日期":"2023-09-22","水位基礎值":"1","負荷時間":27134,"稼動時間":24143,"UPH理論值":2846,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":101.5,"排定生產量":20800,"實際生產量":21772,"入庫量":62400,"系統庫存數":62400,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":62400,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[{"quantity":20800,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-22T00:00:00.000Z","update_date":"2023-09-22T08:58:56.000Z"},{"quantity":20800,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-22T00:00:00.000Z","update_date":"2023-09-22T17:10:39.000Z"},{"quantity":20800,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-22T00:00:00.000Z","update_date":"2023-09-22T17:10:39.000Z"}]},{"日期":"2023-09-23","水位基礎值":"1","負荷時間":27230,"稼動時間":25080,"UPH理論值":2846,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":99.49,"排定生產量":20800,"實際生產量":21418,"入庫量":20800,"系統庫存數":20800,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":20800,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[{"quantity":20800,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2023-09-23T00:00:00.000Z","update_date":"2023-09-23T17:03:08.000Z"}]},{"日期":"2023-09-24","水位基礎值":"1","負荷時間":0,"稼動時間":0,"UPH理論值":0,"最大產能":23143,"班次":"單班","理論週期":1.4,"理論OEE1":90,"設備稼動":0,"排定生產量":0,"實際生產量":0,"入庫量":0,"系統庫存數":0,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":0,"排定生產量平移值":1764700,"實際生產量平移值":1679600,"實際生產量重置日":"2023/04/17T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":1768000,"出貨計畫重置日":"2023/05/01T00:00:00.000Z","出貨計畫重置值":0,"實際出貨平移值":1768000,"實際出貨重置日":"2023/05/01T00:00:00.000Z","實際出貨重置值":0,"庫存數平移值":91000,"庫存明細":[]}],
+                shippingCollapse: true,
+                deliveryList:["(1)出貨計畫數量","(2)實際出貨數量","(3)出貨累計差異","(4)出貨計畫累計數量","(5)實際出貨累積數量"],
+                materialList:[{id:'901-0014-016',description:'LCP E130I IVORY (GP Material) E130i IVORY WHITE VF2201',unit:'kg'},{id:'904-0382-087',description:'磷青銅帶C5191H0.12±0.01mm×20.00+0.00-0.10mm',unit:'kg'},{id:'083-2616-7430',description:'Carrier Tape',unit:'m'},{id:'081-0016-116',description:'Reel',unit:'PC'},{id:'081-0016-117',description:'COVER TAPE',unit:'m'}],
+                componentTypeList:["半成品", "塑膠", "PCB", "原材", "輔料", "塑料", "銅材", "包材"],
+                componentObj:null,
+                selectedFunctionIdx: 3,
+                selectedIdx: 0,
+                testnum:0,
+                searchDate: '',
+                showDate: '',
+                map :[{"Name":"虎躍廠","ID":52,"OgCode":"0602","Functions":[{"Name":"All","Products":[{"Name":"All","Lines":[{"Name":"All","ID":[]}]}]}]}],
+                sql: '',
+                buildIdx : 0,
+                functionIdx: 0,
+                productIdx:0,
+                classID:0,
+                classTitles: ["整天","白班","晚班"],
+                lineID:[],
+                showInvalidRows: false,
+                showColumnOptions: false,
+                manufacturingListOrigin:{},
+                componentResult:{},
+                chart1: null,
+                chartTitle1: "",
+                fitThreshold: function(value, threshold){
+                    return value>=threshold;
+                },
+                bigThanThreshold: function(value, threshold){
+                    return value > threshold
+                },
+                showChangedButton: false,
+                chartIdx: -1,
+                chartVisible: false,
+
+                editInfo:{},
+
+                //版本相關變量
+                version: "V1.15",
+                //建議把versionHistory倒置。最新的寫在最上面
+                versionHistory: [
+                    "V1.15: 版本訊息",
+                ],
+
+                isPortal: false,
+                isEditAuthed: false,
+                userInfo: {},
+            }
+        },
+        created: function(){
+            //設定時間
+            this.searchDate = new Date().toISOString().slice(0,10);
+
+            //this.productClick(0);
+            this.checkParamProcess();
+        },
+        mounted: function(){
+        },
+        unmounted: function(){
+        },
+        computed: {
+            selectedName:{
+                get(){
+                    return (this.selectedIdx === -1)? "" : this.productInfo[this.selectedFunctionIdx][this.selectedIdx].name;
+                }
+            },
+            selectedPartNumber:{
+                get(){
+                    return (this.selectedIdx === -1)? "" : this.productInfo[this.selectedFunctionIdx][this.selectedIdx].partNumber;
+                }
+            },
+            selectedLineID:{
+                get(){
+                    return (this.selectedIdx === -1)? "" : this.productInfo[this.selectedFunctionIdx][this.selectedIdx].lineID;
+                }
+            },
+            dateStrings:{
+                get(){
+                    var res = [];
+                    this.dates.forEach(aDate => {
+                        res.push(aDate.slice(5, 10).replace('-','/')+"\n週"+this.weekday(aDate)+"");
+                    });
+                    return res;
+                }
+            },
+            
+            materialListKG:function(){
+                var res = [];
+                this.materialList.materials.forEach((aPartNumber)=>{
+                    if(this.materialList[aPartNumber].unit === "kg" ||
+                    this.materialList[aPartNumber].unit === "g")
+                    {
+                        res.push(aPartNumber);
+                    }
+                });
+                
+                return res;
+            },
+            materialListM:function(){
+                var res = [];
+                this.materialList.materials.forEach((aPartNumber)=>{
+                    if(this.materialList[aPartNumber].unit === "m")
+                    {
+                        res.push(aPartNumber);
+                    }
+                });
+                return res;
+            },
+            materialListPC:function(){
+                var res = [];
+                this.materialList.materials.forEach((aPartNumber)=>{
+                    if(this.materialList[aPartNumber].unit === "PC" ||
+                    this.materialList[aPartNumber].unit === "KPC")
+                    {
+                        res.push(aPartNumber);
+                    }
+                });
+                return res;
+            },
+        
+            authObjectArray:{
+                get(){
+                    return [{
+                            name: "isEditAuthed",
+                            resource: "manufacturing-plan",
+                            attribute: "企劃編輯人員",
+                        }];
+                },
+            },
+        },
+        watch: {
+            
+        },
+        methods:{
+            checkParamProcess: function(){
+                //處理lineID
+                let param_lineID = parseInt(this.urlParams("lineID"));
+
+                if(param_lineID === NaN)
+                {
+                    this.selectedFunctionIdx = 3;
+                    this.selectedIdx = 1;
+                }
+                else
+                {
+                    
+                    let fIdx = 0, pIdx = 0;
+                    let isFound = false;
+                    for(fIdx = 0; fIdx < this.productInfo.length; fIdx++)
+                    {
+                        for(pIdx = 0; pIdx < this.productInfo[fIdx].length; pIdx++)
+                        {
+                            if(this.productInfo[fIdx][pIdx].lineID === param_lineID)
+                            {
+                                isFound = true;
+                                break;
+                            }
+                        }
+                        if(isFound)
+                        {
+                            break;
+                        }
+                    }
+                    if(isFound)
+                    {
+                        this.selectedFunctionIdx = fIdx;
+                        this.selectedIdx = pIdx;
+                    }
+                    else
+                    {
+                        this.selectedFunctionIdx = 3;
+                        this.selectedIdx = 1;
+                    }
+                }
+
+                //處理searchDate
+                let param_searchDate = this.urlParams("searchDate");
+                if(this.isValidDate(param_searchDate))
+                {
+                    this.searchDate = new Date(param_searchDate).toISOString().slice(0,10);
+                }
+
+                this.searchProcess();
+            },
+            functionClick: function(idx){
+                this.selectedFunctionIdx = idx;
+                this.selectedIdx = 0;
+                this.searchProcess();
+            },
+            productClick: function(idx){
+                this.selectedIdx = idx;
+                //this.setManufacturingList();
+                //this.setComponentObj();
+                this.searchProcess();
+
+                //this.showChartZone();
+            },
+            showChartZone(){
+                /*
+                var obj = this.$refs["chartZone"];
+                var bsCollapse = new bootstrap.Collapse(obj, {
+                                        toggle: false
+                                    });
+                bsCollapse.show();
+                */
+               this.chartVisible = true;
+            },
+            searchProcess: function(event){
+                fetch('/api/V1.2/ManufacturingPlanWithScadaData?searchDate=' + this.searchDate + '&partNumbers=' + this.productInfo[this.selectedFunctionIdx][this.selectedIdx].partNumber)
+                .then((response) => {
+                    //console.log(response);
+                    if(status !== 200)  //使用備用資料
+                    {
+                        return [{"日期":"2024-06-17","水位基礎值":"1","負荷時間":54010,"稼動時間":50000,"UPH理論值":0,"最大產能":48000,"班次":"雙班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":29866,"實際生產量":23662,"良品生產量":22402,"入庫量":0,"系統庫存數":0,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":0,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[],"庫齡明細":{"records":[{"quantity":-84000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-11T00:00:00.000Z","update_date":"2024-06-11T16:52:20.000Z"}],"recordDate":"2024-06-11T00:00:00.000Z","shippingAge":6}},{"日期":"2024-06-18","水位基礎值":"1","負荷時間":54020,"稼動時間":50190,"UPH理論值":0,"最大產能":48000,"班次":"雙班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":29866,"實際生產量":22826,"良品生產量":22267,"入庫量":42000,"系統庫存數":42000,"出貨計畫數量":42000,"實際出貨數量":84000,"實際庫存增量":-42000,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T08:25:24.000Z"},{"quantity":3500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T10:25:57.000Z"},{"quantity":10500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T10:25:57.000Z"},{"quantity":10500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T10:25:57.000Z"},{"quantity":17500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T10:25:57.000Z"},{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T11:31:22.000Z"}],"庫齡明細":{"records":[{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T08:25:24.000Z"},{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T11:31:22.000Z"}],"recordDate":"2024-06-18T00:00:00.000Z","shippingAge":0}},{"日期":"2024-06-19","水位基礎值":"1","負荷時間":46580,"稼動時間":44270,"UPH理論值":0,"最大產能":48000,"班次":"雙班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":29866,"實際生產量":32466,"良品生產量":31239,"入庫量":42000,"系統庫存數":42000,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":42000,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[{"quantity":17500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-19T00:00:00.000Z","update_date":"2024-06-19T11:20:27.000Z"},{"quantity":14000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-19T00:00:00.000Z","update_date":"2024-06-19T11:25:27.000Z"},{"quantity":3500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-19T00:00:00.000Z","update_date":"2024-06-19T11:25:27.000Z"},{"quantity":7000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-19T00:00:00.000Z","update_date":"2024-06-19T13:51:02.000Z"}],"庫齡明細":{"records":[{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T08:25:24.000Z"},{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T11:31:22.000Z"}],"recordDate":"2024-06-18T00:00:00.000Z","shippingAge":1}},{"日期":"2024-06-20","水位基礎值":"1","負荷時間":50520,"稼動時間":43070,"UPH理論值":0,"最大產能":48000,"班次":"雙班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":29866,"實際生產量":21827,"良品生產量":20702,"入庫量":31500,"系統庫存數":31500,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":31500,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[{"quantity":17500,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-20T00:00:00.000Z","update_date":"2024-06-20T16:36:45.000Z"},{"quantity":14000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-20T00:00:00.000Z","update_date":"2024-06-20T16:51:44.000Z"}],"庫齡明細":{"records":[{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T08:25:24.000Z"},{"quantity":-42000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-18T00:00:00.000Z","update_date":"2024-06-18T11:31:22.000Z"}],"recordDate":"2024-06-18T00:00:00.000Z","shippingAge":2}},{"日期":"2024-06-21","水位基礎值":"1","負荷時間":48140,"稼動時間":42180,"UPH理論值":0,"最大產能":48000,"班次":"雙班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":29866,"實際生產量":33644,"良品生產量":32209,"入庫量":21000,"系統庫存數":21000,"出貨計畫數量":84000,"實際出貨數量":84000,"實際庫存增量":-63000,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[{"quantity":14000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-21T00:00:00.000Z","update_date":"2024-06-21T14:45:17.000Z"},{"quantity":7000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"在製品完工","search_date":"2024-06-21T00:00:00.000Z","update_date":"2024-06-21T14:45:17.000Z"},{"quantity":-84000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-21T00:00:00.000Z","update_date":"2024-06-21T17:05:58.000Z"}],"庫齡明細":{"records":[{"quantity":-84000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-21T00:00:00.000Z","update_date":"2024-06-21T17:05:58.000Z"}],"recordDate":"2024-06-21T00:00:00.000Z","shippingAge":0}},{"日期":"2024-06-22","水位基礎值":"1","負荷時間":54030,"稼動時間":49700,"UPH理論值":0,"最大產能":24000,"班次":"單班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":14933,"實際生產量":7519,"良品生產量":6983,"入庫量":0,"系統庫存數":0,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":0,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[],"庫齡明細":{"records":[{"quantity":-84000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-21T00:00:00.000Z","update_date":"2024-06-21T17:05:58.000Z"}],"recordDate":"2024-06-21T00:00:00.000Z","shippingAge":1}},{"日期":"2024-06-23","水位基礎值":"1","負荷時間":27550,"稼動時間":27550,"UPH理論值":0,"最大產能":24000,"班次":"單班","理論週期":1.35,"理論OEE1":90,"設備稼動":0,"排定生產量":0,"實際生產量":0,"良品生產量":0,"入庫量":0,"系統庫存數":0,"出貨計畫數量":0,"實際出貨數量":0,"實際庫存增量":0,"排定生產量平移值":719351,"實際生產量平移值":444500,"實際生產量重置日":"2024/05/11T00:00:00.000Z","實際生產量重置值":0,"出貨計畫平移值":588000,"出貨計畫重置日":"2020/01/01","出貨計畫重置值":0,"實際出貨平移值":378000,"實際出貨重置日":"2024/05/07T00:00:00.000Z","實際出貨重置值":168000,"庫存數平移值":105000,"庫存明細":[],"庫齡明細":{"records":[{"quantity":-84000,"subinventory_code":"MFT61NFT","locator":"MFT61NFT","transaction_type":"訂單發放","search_date":"2024-06-21T00:00:00.000Z","update_date":"2024-06-21T17:05:58.000Z"}],"recordDate":"2024-06-21T00:00:00.000Z","shippingAge":2}}];
+                    }
+                    return response.json();
+                })
+                .then( (response) => {
+                    //console.log(response);
+                    
+                    //this.manufacturingListOrigin = response;
+                    //this.setManufacturingList();
+
+                    this.manufacturingList = response;
+                    this.manufacturingListOrigin = this.clonedObject(response);
+                    this.dates = response.map(x=>x["日期"]);//Object.keys(rawData);
+
+                    this.updateMsg = "更新時間: " + new Date(Date.now()+8*3600*1000).toISOString().slice(11,19);
+
+                    this.showChangedButton = false;
+                    this.drawChart();
+
+                    fetch('/api/V1.1/ComponentTransaction?searchDate=' + this.searchDate + '&partNumbers=' + this.productInfo[this.selectedFunctionIdx][this.selectedIdx].partNumber)
+                    .then((response) => {
+                        //console.log(response);
+                        if(status !== 200)  //使用備用資料
+                        {
+                            let partNumber = this.productInfo[this.selectedFunctionIdx][this.selectedIdx].partNumber;
+                            let obj = {};
+                            let randomComDict = {};
+                            for(let i = 0; i < Math.ceil(Math.random()*4); i++)
+                            {
+                                const partName = "物料編號" + Math.ceil(Math.random()*1000);
+                                randomComDict[partName] = {
+                                    "description": "這段是物料的描述文字",
+                                    "type": "半成品",
+                                    "unit": "PC",
+                                    "supplier": "張三機械",
+                                    "new_lead_time": 2,
+                                    "new_stock_max": 30000+Math.ceil(Math.random()*10000),
+                                    "new_stock_min": Math.ceil(Math.random()*30000),
+                                    "quantity_per_assembly": 1,
+                                    "lead_time": 2,
+                                    "safety_stack_day": 2,
+                                    "quantities": [
+                                        Math.ceil(Math.random()*3000),
+                                        Math.ceil(Math.random()*3000),
+                                        Math.ceil(Math.random()*3000),
+                                        Math.ceil(Math.random()*3000),
+                                        Math.ceil(Math.random()*3000),
+                                        Math.ceil(Math.random()*3000),
+                                        Math.ceil(Math.random()*3000),
+                                    ],
+                                    "quantity_offset": 0,
+                                    "work_order_detail": [{
+                                        "row": "1",
+                                        "ShowDate": this.dates[0],
+                                        "HideDate": null,
+                                        "OrganizationName": "組織名稱",
+                                        "WorkNumber": "211405481059",
+                                        "ClassCode": "量試",
+                                        "Status": "完成",
+                                        "Creater": "江姿瑩",
+                                        "AssemblyPartNumber": partNumber,
+                                        "AssemblyPartName": "組裝物料",
+                                        "StartDate": "2024-06-03T08:00:00.000Z",
+                                        "TargetQuantity": 254562,
+                                        "CompletedQuantity": 210000,
+                                        "ComponentPartNumber": partNumber,
+                                        "ComponentPartName": "零件物料",
+                                        "Unit": "PC",
+                                        "QuantityPerAssembly": 1,
+                                        "ComponentYieldFactor": 1,
+                                        "RequiredQuantity": 254562,
+                                        "QuantityIssued": 216148,
+                                        "ClassId": "部門代碼",
+                                        "ProgramUpdateDate": "2024-06-12T17:59:17.000Z",
+                                        "TargetCost": 466294.5,
+                                        "RealCost": 479945.8266,
+                                        "QuantityUsed": "210000.0000",
+                                        "QuantityLoss": "6148.0000",
+                                        "LossRatio": "2.93"
+                                    },],
+                                    "component_detail": [
+                                        [],
+                                        [{
+                                            "part_number": partNumber,
+                                            "quantity": 19142,
+                                            "subinventory_code": "倉碼",
+                                            "locator": "儲位碼",
+                                            "transaction_type": "在製品完工",
+                                            "search_date": this.dates[0],
+                                            "update_date": "2024-06-18T09:35:50.000Z"
+                                        },]
+                                    ],
+                                }
+                            }
+                            obj[partNumber] = {
+                                dates: this.dates,
+                                components: Object.keys(randomComDict),
+                            };
+                            obj[partNumber].components.forEach(aCom=>{
+                                obj[partNumber][aCom] = randomComDict[aCom];
+                            })
+                            //console.log(obj);
+                            return obj;
+                        }
+                        return response.json();
+                    })
+                    .then( (response) => {
+                        //console.log(response);
+                        this.componentResult = response;
+                        this.setComponentObj();
+
+                        this.showDate = this.searchDate;
+
+                        //this.productClick(this.selectedIdx);
+                    })
+                    .catch((error) => {
+                        console.log(`Error2: ${error}`);
+                    });
+                })
+                .catch((error) => {
+                    //this.setManufacturingList();
+                    console.log(`Error1: ${error}`);
+                });
+            },
+            shiftDay: function(shift){
+                var tempDate = new Date(this.searchDate);
+                if(shift === 30)
+                {
+                    tempDate.setMonth(tempDate.getMonth()+1);
+                }
+                else if(shift === -30)
+                {
+                    tempDate.setMonth(tempDate.getMonth()-1);
+                }
+                else
+                {
+                    tempDate.setDate(tempDate.getDate()+shift);
+                }
+                
+                this.searchDate = tempDate.toISOString().slice(0,10);
+                this.searchProcess();
+            },
+            setComponentObj(){
+                
+                if(this.componentResult[this.selectedPartNumber] !== undefined)
+                {
+                    let temp = this.componentResult[this.selectedPartNumber];
+                    
+                    temp.components.forEach((aPartNumber)=>{
+                        //增加折疊屬性(collapse)
+                        if(temp[aPartNumber] !== undefined)
+                        {
+                            temp[aPartNumber].collapse = true;
+                        }
+                        //設定損耗陣列
+                        if(temp[aPartNumber].work_order_detail !== undefined)
+                        {
+                            temp[aPartNumber].quantity_issued_2WK  = 0;   //已使用的2週總值
+                            temp[aPartNumber].quantity_used_2WK    = 0;   //應使用的2週總值，要用算的(CompletedQuantity*QuantityPerAssembly/ComponentYieldFactor)
+                            temp[aPartNumber].loss_ratio_2WK       = 0;   //損耗率的2週平均值，(已使用-應使用)*100/應使用, 取小數2位
+                            temp[aPartNumber].work_order_2WK = [];
+                            temp[aPartNumber].quantity_issued  = Array(temp.dates.length).fill(0);   //已使用的總數陣列(依日期)
+                            temp[aPartNumber].quantity_used    = Array(temp.dates.length).fill(0);   //應使用的總數陣列(依日期)，要用算的(CompletedQuantity*QuantityPerAssembly/ComponentYieldFactor)
+                            temp[aPartNumber].loss_ratio       = Array(temp.dates.length).fill(0);   //損耗率陣列(依日期)，(已使用-應使用)*100/應使用, 取小數2位
+                            temp[aPartNumber].work_order_byDay = [];
+                            for(let j = 0; j < temp.dates.length; j++)
+                            {
+                                temp[aPartNumber].work_order_byDay.push([]);
+                            }
+
+                            temp[aPartNumber].work_order_detail.forEach(item=>{
+                                let idx = temp.dates.indexOf(item.StartDate.slice(0,10)+"T00:00:00.000Z");
+                                if(idx !== -1)
+                                {
+                                    temp[aPartNumber].quantity_issued[idx] += item.QuantityIssued;
+                                    temp[aPartNumber].quantity_used[idx] += item.CompletedQuantity*item.QuantityPerAssembly/item.ComponentYieldFactor;
+                                    temp[aPartNumber].work_order_byDay[idx].push(item);
+                                }
+                                else
+                                {
+                                    temp[aPartNumber].quantity_issued_2WK += item.QuantityIssued;
+                                    temp[aPartNumber].quantity_used_2WK += item.CompletedQuantity*item.QuantityPerAssembly/item.ComponentYieldFactor;
+                                    temp[aPartNumber].work_order_2WK.push(item);
+                                }
+                            });
+                            //最後記錄一下每天的loss_ratio
+                            for(let i = 0; i < temp.dates.length; i++)
+                            {
+                                temp[aPartNumber].loss_ratio[i] = 
+                                    (temp[aPartNumber].quantity_used[i] === 0)? 0 : 
+                                        Math.round((temp[aPartNumber].quantity_issued[i]-temp[aPartNumber].quantity_used[i])*10000/temp[aPartNumber].quantity_used[i])/100;
+                            }
+                            //最後記錄一下2週平均的loss_ratio
+                            temp[aPartNumber].loss_ratio_2WK = 
+                                (temp[aPartNumber].quantity_used_2WK === 0)? 0 : 
+                                Math.round((temp[aPartNumber].quantity_issued_2WK-temp[aPartNumber].quantity_used_2WK)*10000/temp[aPartNumber].quantity_used_2WK)/100;
+                        }
+                    });
+
+                    this.componentObj = temp;
+                }
+                else
+                {
+                    this.componentObj = {
+                        components:[],
+                    };
+                }
+            },
+            availability_rate: function(idx){   //產能利用率 = 企劃排產/最大產能
+                return (this.manufacturingList[idx]["排定生產量"] * 100 / this.manufacturingList[idx]["最大產能"]).toFixed(2) + "%"
+                //return this.manufacturingList[idx]["設備稼動"]+"%";
+                //return (this.manufacturingList[idx]["最大產能"]>0)?(this.manufacturingList[idx]["排定生產量"]*100/this.manufacturingList[idx]["最大產能"]).toFixed(1)+"%":"0%";
+            },
+            achievement_rate: function(idx){    //達成率
+                return this.manufacturingList[idx]["排定生產量"]>0?(this.manufacturingList[idx]["良品生產量"]*100/this.manufacturingList[idx]["排定生產量"]).toFixed(1)+"%":"0%"
+            },
+            achievement_rate_array: function(){ 
+                var res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(parseFloat(this.achievement_rate(idx).slice(0,-1)));
+                }
+                return res;
+            },
+            achievement_rate_is_red: function(idx){
+                var res = false;
+                var date = new Date(this.dates[idx]);
+                if(date.getTime() <= Date.now())   //還要日期小於等於今天
+                {
+                    //if(this.manufacturingList[idx]["排定生產量"] > 0 && this.manufacturingList[idx]["實際生產量"] < this.manufacturingList[idx]["排定生產量"])
+                    if(this.manufacturingList[idx]["排定生產量"] > 0)
+                    {
+                        if(this.manufacturingList[idx]["良品生產量"] === 0 ||
+                            this.achievement_ct(idx) >= this.achievement_tt(idx))
+                        res = true;
+                    }
+                }
+                
+                return res;
+            },
+            achievement_rate_is_green: function(idx){
+                var res = false;
+                //if(this.manufacturingList[idx]["排定生產量"] > 0 && this.manufacturingList[idx]["實際生產量"] >= this.manufacturingList[idx]["排定生產量"])
+                if(this.achievement_ct(idx) < this.achievement_tt(idx))
+                {
+                    res = true;
+                }
+                return res;
+            },
+            achievement_rate_description: function(idx){
+                var date = new Date(this.dates[idx]);
+                if(date.getTime() > Date.now())   //日期 > 今天
+                {
+                    return "未到達排產日";
+                }
+                if(this.manufacturingList[idx]["排定生產量"] === 0)
+                {
+                    return "無排產";
+                }
+                if(this.manufacturingList[idx]["良品生產量"] === "0" || this.manufacturingList[idx]["良品生產量"] === 0)
+                {
+                    return "無實際產出";
+                }
+
+                var TT = this.achievement_tt(idx);
+                var CT = this.achievement_ct(idx);
+                
+                return "生產節拍(TT)：8小時工時 / 排定生產量(" + this.manufacturingList[idx]["排定生產量"] + ") = " + this.achievement_tt(idx) + " 秒/pc" +
+                        "<br>" +
+                        (this.achievement_full_worktime(idx)?
+                        "循環時間(CT)：8小時工時 / 良品生產量(" + this.manufacturingList[idx]["良品生產量"] + ") = " + this.achievement_ct(idx) + "秒/pc"
+                        :
+                        "循環時間(CT)：稼動時間(" + this.secondToString(this.manufacturingList[idx]["稼動時間"]) + ") / 良品生產量(" + this.manufacturingList[idx]["良品生產量"] + ") = " + this.achievement_ct(idx) + "秒/pc"
+                        ) +
+                        "<br>" +
+                        ((TT > CT)?"循環時間優於生產節拍(綠燈)":"循環時間差於生產節拍(紅燈)");
+            },
+            achievement_tt: function(idx){
+                return Math.round((28800 / this.manufacturingList[idx]["排定生產量"]) * 1000)/1000;  //最多保留小數3位
+            },
+            achievement_ct: function(idx){
+                if(this.achievement_full_worktime(idx))
+                {
+                    return Math.round((28800 / this.manufacturingList[idx]["良品生產量"]) * 1000)/1000;//最多保留小數3位
+                }
+                else
+                {
+                    return Math.round((this.manufacturingList[idx]["稼動時間"] / this.manufacturingList[idx]["良品生產量"]) * 1000)/1000;//最多保留小數3位
+                }
+            },
+            achievement_full_worktime: function(idx){
+                var res = true;
+                var date = new Date(this.dates[idx]);
+                //日期在今天，且目前在白班時間內(<17:30)，才不使用完整8小時公式(會看稼動時間)
+                var now = new Date();
+                if(this.sameDay(date, now) &&
+                    (now.getUTCHours()*100+now.getUTCMinutes()) < 930 )   //930是17:30的UTC+8時間調整成+0時間的09:30，再用10進位處理
+                {
+                    //當稼動時間長於8小時，也直接以8小時記錄
+                    if(this.manufacturingList[idx]["稼動時間"] > 28800)
+                    {
+                        res = true;
+                    }
+                    else
+                    {
+                        res = false;
+                    }
+                }
+                return res;
+            },
+            sameDay: function(d1, d2) {
+                return d1.getFullYear() === d2.getFullYear() &&
+                    d1.getMonth() === d2.getMonth() &&
+                    d1.getDate() === d2.getDate();
+            },
+            production_target_nonzero: function(idx){  //查詢前n天不為0的排產量
+                if(idx < 0)
+                {
+                    return 0;
+                }
+                res = this.manufacturingList[idx]["排定生產量"];
+                if(res === 0)
+                {
+                    res = this.production_target_nonzero(idx-1);
+                }
+                return res;
+            },
+            production_target_array: function(){
+                var res = [];
+                this.manufacturingList.forEach((item)=>{
+                    res.push(item["排定生產量"]);
+                });
+                return res;
+            },
+            production_real_array: function(){
+                var res = [];
+                this.manufacturingList.forEach((item)=>{
+                    res.push(item["良品生產量"]);
+                });
+                return res;
+            },
+            production_diff_acc: function(idx){ //欠產累積量
+                let res = this.manufacturingList[0]["實際生產量平移值"] - this.manufacturingList[0]["排定生產量平移值"] + this.manufacturingList[0]["實際生產量重置值"];
+                for(let i = 0; i <= idx; i++)   //要包含當天的計算，所以條件用等於
+                {
+                    if(this.manufacturingList[i]["區間重置明細"] !== undefined && this.manufacturingList[i]["區間重置明細"].production_real !== undefined)
+                    {
+                        res = this.manufacturingList[i]["區間重置明細"].production_real.offset;
+                    }
+                    else
+                    {
+                        res += (this.manufacturingList[i]["入庫量"]-this.manufacturingList[i]["排定生產量"]);
+                    }
+                }
+                return res;
+            },
+            production_diff_acc_array: function(idx){ //欠產累積量 陣列
+                var res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.production_diff_acc(idx));
+                }
+                return res;
+            },
+            /* 棄用
+            stock_acc: function(idx){ //實際庫存數(有扣掉出貨量)
+                var res = this.manufacturingList[0]["庫存數平移值"];
+
+                for(var i = 0; i <= idx; i++)   //要包含當天的計算，所以條件用等於
+                {
+                    res += this.manufacturingList[i]["入庫量"] - 
+                        (this.manufacturingList[i]["實際出貨數量"]!==0?this.manufacturingList[i]["實際出貨數量"]:
+                                                                        this.manufacturingList[i]["出貨計畫數量"]);
+                }
+                return res;
+            },
+            */
+            stock_acc_array: function(idx){ //累計庫存數 陣列
+                var res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.system_stock_acc(idx));
+                }
+                return res;
+            },
+            system_stock_acc: function(idx){//系統庫存數
+                //var res = this.manufacturingList[0]["實際生產量平移值"];
+                //res -= this.manufacturingList[0]["實際出貨平移值"];
+                var res = this.manufacturingList[0]["庫存數平移值"];
+                for(var i = 0; i <= idx; i++)   //要包含當天的計算，所以條件用等於
+                {
+                    res += this.manufacturingList[i]["實際庫存增量"];//this.manufacturingList[i]["入庫量"] - this.manufacturingList[i]["實際出貨數量"];
+                }
+                return Math.round(res);
+            },
+            system_stock_potential_acc: function(idx){//系統庫存趨勢數
+                /*
+                var res = this.manufacturingList[0]["庫存數平移值"];
+                for(var i = 0; i <= idx; i++)   //要包含當天的計算，所以條件用等於
+                {
+                    res += this.manufacturingList[i]["實際庫存增量"] - this.manufacturingList[i]["出貨計畫數量"];
+                }
+                */
+                let res = this.system_stock_acc(idx) - this.manufacturingList[idx]["出貨計畫數量"];
+                return Math.round(res);
+            },
+            ship_diff: function(idx){   //出貨差異
+                return this.manufacturingList[idx]["實際出貨數量"] - this.manufacturingList[idx]["出貨計畫數量"];
+            },
+            ship_diff_array: function(idx){ //出貨差異 陣列
+                var res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.ship_diff(idx));
+                }
+                return res;
+            },
+            ship_target_array: function(){
+                let res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.manufacturingList[idx]["出貨計畫數量"]);
+                }
+                return res;
+            },
+            ship_real_array: function(){
+                let res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.manufacturingList[idx]["實際出貨數量"]);
+                }
+                return res;
+            },
+            ship_target_acc: function(idx){ //出貨計畫累計數量
+                var res = this.manufacturingList[0]["出貨計畫平移值"] + this.manufacturingList[0]["出貨計畫重置值"];
+                for(var i = 0; i <= idx; i++)   //要包含當天的計算，所以條件用等於
+                {
+                    if(this.manufacturingList[i]["區間重置明細"] !== undefined && this.manufacturingList[i]["區間重置明細"].ship_target !== undefined)
+                    {
+                        res = this.manufacturingList[i]["區間重置明細"].ship_target.offset;
+                    }
+                    else
+                    {
+                        res += this.manufacturingList[i]["出貨計畫數量"];
+                    }
+                }
+                return res;
+            },
+            ship_target_acc_array: function(idx){ //出貨計畫累計數量 陣列
+                var res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.ship_target_acc(idx));
+                }
+                return res;
+            },
+            ship_real_acc: function(idx){   //實際出貨累積數量
+                var res = this.manufacturingList[0]["實際出貨平移值"] + this.manufacturingList[0]["實際出貨重置值"];
+                for(var i = 0; i <= idx; i++)   //要包含當天的計算，所以條件用等於
+                {
+                    if(this.manufacturingList[i]["區間重置明細"] !== undefined && this.manufacturingList[i]["區間重置明細"].ship_real !== undefined)
+                    {
+                        res = this.manufacturingList[i]["區間重置明細"].ship_real.offset;
+                    }
+                    else
+                    {
+                        res += this.manufacturingList[i]["實際出貨數量"];
+                    }
+                    
+                }
+                return res;
+            },
+            ship_real_acc_array: function(){ //實際出貨累積數量 陣列
+                var res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.ship_real_acc(idx));
+                }
+                return res;
+            },
+            
+            ship_diff_acc: function(idx){   //累積出貨差異
+                return this.ship_real_acc(idx) - this.ship_target_acc(idx);
+            },
+            ship_diff_acc_array: function(){   //累積出貨差異 陣列
+                let res = [];
+                for(var idx = 0; idx < this.dates.length; idx++)
+                {
+                    res.push(this.ship_diff_acc(idx));
+                }
+                return res;
+            },
+
+            production_light_class: function(idx){  //顯示產品燈號的class style
+                var res = "";
+                var productionTargetNonZero = this.production_target_nonzero(idx);
+                if(productionTargetNonZero === 0)
+                {
+                    if(this.system_stock_acc(idx) > 0)
+                    {
+                        res = "red_light";
+                    }
+                    else
+                    {
+                        res = "yellow_light";
+                    }
+                }
+                else if(this.system_stock_acc(idx) > productionTargetNonZero*5)
+                {
+                    res = "red_light";
+                }
+                else if(this.system_stock_acc(idx) > productionTargetNonZero*3)
+                {
+                    res = "green_light";
+                }
+                else
+                {
+                    res = "yellow_light";
+                }
+                return res;
+            },
+            production_light_description: function(idx){  //顯示產品燈號的描述句
+                
+                var res = "";
+                var productionTargetNonZero = this.production_target_nonzero(idx);
+                if(productionTargetNonZero === 0)
+                {
+                    if(this.system_stock_acc(idx) > 0)
+                    {
+                        res = "高水位(" + this.perth(this.system_stock_acc(idx)) + ")";
+                    }
+                    else
+                    {
+                        res = "低水位(" + this.perth(this.system_stock_acc(idx)) + ")";
+                    }
+                }
+                else if(this.system_stock_acc(idx) > productionTargetNonZero*5)
+                {
+                    res = "超過上水位(系統庫存" + this.perth(this.system_stock_acc(idx)) + 
+                            "/計劃量" + this.perth(productionTargetNonZero) + 
+                            ")=可用天數(" + 
+                            Math.round(this.system_stock_acc(idx)/productionTargetNonZero)+ 
+                            ") > (5) day";
+                }
+                else if(this.system_stock_acc(idx) > productionTargetNonZero*3)
+                {
+                    res = "正常水位(系統庫存" + this.perth(this.system_stock_acc(idx)) + 
+                            "/計劃量" + this.perth(productionTargetNonZero) + 
+                            ")=可用天數(" + 
+                            Math.round(this.system_stock_acc(idx)/productionTargetNonZero)+ 
+                            ") < (5) day";
+                }
+                else
+                {
+                    res = "低於下水位(系統庫存" + this.perth(this.system_stock_acc(idx)) + 
+                            "/計劃量" + this.perth(productionTargetNonZero) + 
+                            ")=可用天數(" + 
+                            Math.round(this.system_stock_acc(idx)/productionTargetNonZero)+ 
+                            ") < (3) day";
+                }
+                return res;
+            },
+            
+            potential_light_class: function(idx){  //顯示趨勢燈號的class style
+                var res = "";
+                var productionTargetNonZero = this.production_target_nonzero(idx);
+                if(productionTargetNonZero === 0)
+                {
+                    if(this.system_stock_potential_acc(idx) > 0)
+                    {
+                        res = "red_light";
+                    }
+                    else
+                    {
+                        res = "yellow_light";
+                    }
+                }
+                else if(this.system_stock_potential_acc(idx) > productionTargetNonZero * 5)
+                {
+                    res = "red_light";
+                }
+                else if(this.system_stock_potential_acc(idx) > productionTargetNonZero * 2)
+                {
+                    res = "green_light";
+                }
+                else
+                {
+                    res = "yellow_light";
+                }
+                return res;
+            },
+            potential_light_description: function(idx){  //顯示趨勢燈號的描述句
+                
+                var res = "";
+                var productionTargetNonZero = this.production_target_nonzero(idx);
+                if(productionTargetNonZero === 0)
+                {
+                    if(this.system_stock_potential_acc(idx) > 0)
+                    {
+                        res = "高水位(" + this.perth(this.system_stock_potential_acc(idx)) + ")";
+                    }
+                    else
+                    {
+                        res = "低水位(" + this.perth(this.system_stock_potential_acc(idx)) + ")";
+                    }
+                }
+                else if(this.system_stock_potential_acc(idx) > productionTargetNonZero*5)
+                {
+                    res = "超過上水位(系統庫存預估" + this.perth(this.system_stock_potential_acc(idx)) + 
+                            "/計劃量" + this.perth(productionTargetNonZero) + 
+                            ")=可用天數(" + 
+                            Math.round(this.system_stock_potential_acc(idx)/productionTargetNonZero)+ 
+                            ") > (5) day";
+                }
+                else if(this.system_stock_potential_acc(idx) > productionTargetNonZero*2)
+                {
+                    res = "正常水位(系統庫存預估" + this.perth(this.system_stock_potential_acc(idx)) + 
+                            "/計劃量" + this.perth(productionTargetNonZero) + 
+                            ")=可用天數(" + 
+                            Math.round(this.system_stock_potential_acc(idx)/productionTargetNonZero)+ 
+                            ") < (5) day";
+                }
+                else
+                {
+                    res = "低於下水位(系統庫存預估" + this.perth(this.system_stock_potential_acc(idx)) + 
+                            "/計劃量" + this.perth(productionTargetNonZero) + 
+                            ")=可用天數(" + 
+                            Math.round(this.system_stock_potential_acc(idx)/productionTargetNonZero)+ 
+                            ") < (2) day";
+                }
+                return res;
+            },
+            
+            shipping_age_light_class: function(idx){  //顯示庫齡燈號的class style
+                let res = "";
+                if(this.system_stock_acc(idx) === 0)
+                {
+                    res = "green_light";
+                }
+                else if(this.manufacturingList[idx]["庫齡明細"] === undefined || this.manufacturingList[idx]["庫齡明細"].shippingAge === undefined)
+                {
+                    res = "red_light";
+                }
+                else
+                {
+                    if(this.manufacturingList[idx]["庫齡明細"].shippingAge === -1)
+                    {
+                        res = "green_light";
+                    }
+                    else if(this.manufacturingList[idx]["庫齡明細"].shippingAge <= 15)
+                    {
+                        res = "green_light";
+                    }
+                    else if(this.manufacturingList[idx]["庫齡明細"].shippingAge <= 30)
+                    {
+                        res = "yellow_light";
+                    }
+                    else
+                    {
+                        res = "red_light";
+                    }
+                }
+                return res;
+            },
+            shipping_age_light_description: function(idx){  //顯示庫齡燈號的描述句
+                
+                let res = "";
+                if(this.system_stock_acc(idx) === 0)
+                {
+                    res = "無庫存呆滯";
+                }
+                else if(this.manufacturingList[idx]["庫齡明細"] === undefined || this.manufacturingList[idx]["庫齡明細"].shippingAge === undefined)
+                {
+                    res = "未知庫齡";
+                }
+                else
+                {
+                    if(this.manufacturingList[idx]["庫齡明細"].shippingAge === -1)
+                    {
+                        res = "無庫存記錄，無法計算";
+                    }
+                    else if(this.manufacturingList[idx]["庫齡明細"].shippingAge <= 15)
+                    {
+                        res = `正常庫齡(${this.manufacturingList[idx]["庫齡明細"].shippingAge})天`;
+                    }
+                    else if(this.manufacturingList[idx]["庫齡明細"].shippingAge <= 30)
+                    {
+                        res = `中等庫齡(${this.manufacturingList[idx]["庫齡明細"].shippingAge})天`;
+                    }
+                    else
+                    {
+                        res = `高庫齡(${this.manufacturingList[idx]["庫齡明細"].shippingAge})天`;
+                    }
+                }
+                return res;
+            },
+            
+
+            allow_product_days: function(componentPortNumber, idx){    //物料可用天數：物料總數/組成用量/(1+平均損耗率or標準損耗率)/排定生產量
+                var production_target = this.production_target_nonzero(idx);
+                if(production_target > 0)
+                {
+                    //return Math.round(this.componentObj[componentPortNumber].quantities[idx]/this.componentObj[componentPortNumber].quantity_per_assembly/1.03/production_target);
+                    if(this.componentObj[componentPortNumber].loss_ratio_2WK !== undefined)
+                    {
+                        return Math.round(this.componentObj[componentPortNumber].quantities[idx]/this.componentObj[componentPortNumber].quantity_per_assembly/(1+this.componentObj[componentPortNumber].loss_ratio_2WK/100)/production_target);
+                    }
+                    else
+                    {
+                        return Math.round(this.componentObj[componentPortNumber].quantities[idx]/this.componentObj[componentPortNumber].quantity_per_assembly/1.03/production_target);
+                    }
+                }
+                else if(idx < 0)
+                {
+                    if(this.componentObj[componentPortNumber].quantities[idx] === 0)
+                    {
+                        return 0; //回傳特殊值
+                    }
+                    else
+                    {
+                        //return this.componentObj[componentPortNumber].lead_time + this.componentObj[componentPortNumber].safety_stack_day + 1;
+                        return this.componentObj[componentPortNumber].new_lead_time + 1;
+                    }
+                }
+                else
+                {
+                    return this. allow_product_days(componentPortNumber, idx-1);
+                }
+            },
+            component_light_class: function(componentPortNumber, idx){
+                var res = "";
+                /*
+                var days = this.allow_product_days(componentPortNumber, idx);
+                if(days > this.componentObj[componentPortNumber].lead_time + this.componentObj[componentPortNumber].safety_stack_day)
+                {
+                    res = "red_light";
+                }
+                else if(days >=  this.componentObj[componentPortNumber].safety_stack_day)
+                {
+                    res = "green_light";
+                }
+                else
+                {
+                    res = "yellow_light";
+                }
+                */
+                //優化2.0版本
+                if(this.componentObj[componentPortNumber].quantities[idx] > this.componentObj[componentPortNumber].new_stock_max)
+                {
+                    res = "red_light";
+                }
+                else if(this.componentObj[componentPortNumber].quantities[idx] >=  this.componentObj[componentPortNumber].new_stock_min)
+                {
+                    res = "green_light";
+                }
+                else
+                {
+                    res = "yellow_light";
+                }
+                return res;
+            },
+            component_light_description: function(componentPortNumber, idx){
+                var res = "";
+                /*
+                var days = this.allow_product_days(componentPortNumber, idx);
+                var high = this.componentObj[componentPortNumber].lead_time + this.componentObj[componentPortNumber].safety_stack_day;
+                var low = this.componentObj[componentPortNumber].safety_stack_day;
+                if(days > this.componentObj[componentPortNumber].lead_time + this.componentObj[componentPortNumber].safety_stack_day)
+                {
+                    res = "高水位    天數超過" + high +"天(LT "+ this.componentObj[componentPortNumber].lead_time +"天 + SAFE "+ this.componentObj[componentPortNumber].safety_stack_day +"天)";
+                }
+                else if(days >=  this.componentObj[componentPortNumber].safety_stack_day)
+                {
+                    res = "正常水位";
+                }
+                else
+                {
+                    res = "低水位 天數少於" + low + "天(SAFE "+ low +"天)";
+                }
+                */
+                //優化2.0版本
+                if(this.componentObj[componentPortNumber].quantities[idx] > this.componentObj[componentPortNumber].new_stock_max)
+                {
+                    res = `高水位    (數值${this.perth((this.componentObj[componentPortNumber].quantities[idx]).toFixed(0))}超過上水位${this.perth(this.componentObj[componentPortNumber].new_stock_max)}`;
+                }
+                else if(this.componentObj[componentPortNumber].quantities[idx] >=  this.componentObj[componentPortNumber].new_stock_min)
+                {
+                    res = "正常水位";
+                }
+                else
+                {
+                    res = `低水位    (數值${this.perth((this.componentObj[componentPortNumber].quantities[idx]).toFixed(0))}低於下水位${this.perth(this.componentObj[componentPortNumber].new_stock_min)}`;
+                }
+                return res;
+            },
+            partNumbersWithType:function(typeStr){  //依分類決定的元件陣列
+                var res = [];
+                
+                this.componentObj.components.forEach((aPartNumber)=>{
+                    if(this.componentObj[aPartNumber] !== undefined && this.componentObj[aPartNumber].type === typeStr)
+                    {
+                        res.push(aPartNumber);
+                    }
+                });
+                
+                return res;
+            },
+            componentCollapse(aPartNumber, collapse)
+            {
+                this.componentObj[aPartNumber].collapse = collapse;
+                this.$forceUpdate();
+            },
+            
+            perth: function(value){     //顯示數值的千分號
+                if (!value) return 0
+                // 獲取整數部分
+                const intPart = Math.trunc(value)
+                // 整數部分處理，增加,
+                const intPartFormat = intPart.toString().replace(/(\d)(?=(?:\d{3})+$)/g, '$1,')
+                // 預定義小數部分
+                let floatPart = ''
+                // 將數值截取為小數部分和整數部分
+                const valueArray = value.toString().split('.')
+                if (valueArray.length === 2) { // 有小數部分
+                    floatPart = valueArray[1].toString() // 取得小數部分
+                    return intPartFormat + '.' + floatPart
+                }
+                return intPartFormat + floatPart
+            },
+            
+            inputToThousand: function(idx, key) {
+                var el = document.getElementById('input_'+idx+'_'+key);
+                var res = Number(el.value.replace(/,/g, ""));
+                if(isNaN(res))
+                {
+                    res = 0;
+                    el.value = 0;
+                }
+                //this.manufacturingList[idx][key] = res;
+                this.editInfo.value = res;
+            },
+            inputToThousand2: function(idx, key) {
+                var el = document.getElementById('input_'+idx+'_'+key);
+                var res = Number(el.value.replace(/,/g, ""));
+                if(isNaN(res))
+                {
+                    res = 0;
+                    el.value = 0;
+                }
+                this.manufacturingList[idx][key] = res;
+            },
+            secondToString(sec){
+                var res = "";
+                var h = Math.floor(sec / 3600);
+                var m = Math.floor((sec - h*3600) / 60);
+                var s = sec % 60;
+                res = (h === 0? "": h + "時") +
+                        (h === 0 && m === 0? "": m + "分") +
+                        s + "秒";
+                return res;
+            },
+            toSimpleDT(dtString){
+                //2023-03-08T19:59:59.000Z
+                return dtString.slice(0,19).replace(/-/g,'/').replace('T',' ');
+            },
+            weekday(aDateStr){
+                const dayArray = ["日","一","二","三","四","五","六"];
+                var res = '';
+                if(aDateStr !== '')
+                {
+                    res = dayArray[new Date(aDateStr).getDay()];
+                }
+                return res;
+            },
+            
+            changeCheck(type, idx){
+                var res = false;
+                if(this.manufacturingListOrigin[idx] !== undefined)
+                {
+                    switch(type)
+                    {
+                        case 2:     //排定生產量
+                            if(this.manufacturingList[idx]["排定生產量"] !== this.manufacturingListOrigin[idx]["排定生產量"])
+                            {
+                                res = true;
+                                this.showChangedButton = true;
+                            }
+                        break;
+                        case 3:     //出貨計畫數量
+                            if(this.manufacturingList[idx]["出貨計畫數量"] !== this.manufacturingListOrigin[idx]["出貨計畫數量"])
+                            {
+                                res = true;
+                                this.showChangedButton = true;
+                            }
+                        break;
+                    }
+                }
+                return res;
+            },
+            writeProcess: function(event){
+                let yes = confirm('請再次確認是否修改，修改後的數值會重新載入');
+
+                if(!yes)
+                {
+                    return;
+                }
+
+                //確認修改內容
+                let objs = [];
+                this.dates.forEach((aDate, idx)=>{
+                    let obj = {};
+                    
+                    if(this.manufacturingList[idx]["排定生產量"] !== this.manufacturingListOrigin[idx]["排定生產量"])
+                    {
+                        obj.part_number = this.selectedPartNumber;
+                        obj.search_date = aDate;
+                        obj.production_target = this.manufacturingList[idx]["排定生產量"];
+                    }
+                    if(this.manufacturingList[idx]["出貨計畫數量"] !== this.manufacturingListOrigin[idx]["出貨計畫數量"])
+                    {
+                        obj.part_number = this.selectedPartNumber;
+                        obj.search_date = aDate;
+                        obj.ship_target = this.manufacturingList[idx]["出貨計畫數量"];
+                    }
+                    if(obj.search_date !== undefined)
+                    {
+                        obj.update_date = new Date();
+                        obj.update_user = this.userInfo.preferred_username.toUpperCase();
+                        //objs.push(obj);
+
+                        fetch("/api/manufacturing-plan/report",{
+                            method: 'POST',
+                            body: JSON.stringify(obj),
+                        })
+                        .then((response) => {
+                            //console.log(response);
+                            return response.json();
+                        })
+                        .then( (response) => {
+                            this.toast("編輯企劃數值", "寫入成功");
+                            this.searchProcess();
+                        })
+                        .catch((error) => {
+                            this.toast("編輯企劃數值", `寫入異常: ${error}`);
+                        });
+                    }
+                });
+
+                //console.log("save data: " + objs);
+
+                //alert("將記錄以下內容(還在實作中): " + JSON.stringify(objs));
+
+                /*
+                fetch('/api/saveRecord',{
+                    method: 'POST',
+                    body: JSON.stringify(objs),
+                })
+                .then((response) => {
+                    //console.log(response);
+                    return response.json();
+                })
+                .then( (response) => {
+                    console.log("寫入成功:" + response);
+                    this.searchProcess();
+                })
+                .catch((error) => {
+                    console.log(`Error2: ${error}`);
+                });
+                */
+            },
+            overtimeCheckProcess: function(){
+                let yes = confirm('請再次確認是否發信(無論假日是否有排產，都會狀態信通知)？');
+
+                if(!yes)
+                {
+                    return;
+                }
+
+                fetch("/api/manufacturing-plan/overtime-check")
+                .then((response) => {
+                    //console.log(response);
+                    return response.json();
+                })
+                .then( (response) => {
+                    if(response.success)
+                    {
+                        this.toast("假日排產通知", "通知成功");
+                    }
+                    else
+                    {
+                        this.toast("假日排產通知", "通知失敗(請通知系統人員處理)");
+                    }
+                    
+                })
+                .catch((error) => {
+                    this.toast("假日排產通知", `執行異常: ${error}`);
+                });
+            },
+            planCheckProcess: function(){
+                let yes = confirm('請再次確認是否發信(會針對本次變更的產品發信通知)？');
+
+                if(!yes)
+                {
+                    return;
+                }
+
+                fetch("/api/manufacturing-plan/plan-check")
+                .then((response) => {
+                    //console.log(response);
+                    return response.json();
+                })
+                .then( (response) => {
+                    if(response.success)
+                    {
+                        this.toast("企劃變更通知", "通知成功");
+                    }
+                    else
+                    {
+                        this.toast("企劃變更通知", "通知失敗(請通知系統人員處理)");
+                    }
+                    
+                })
+                .catch((error) => {
+                    this.toast("企劃變更通知", `執行異常: ${error}`);
+                });
+            },
+            
+            editValueModal(idx, key){
+                let value = 0;
+                let withEditDetail = true;
+                let remark = "";
+                let title = "修改數值 - " + key + '(' + this.dates[idx] + ')';
+                let isDelete = false;
+                if(key === "排定生產量" || key === "出貨計畫數量")
+                {
+                    value = this.manufacturingList[idx][key];
+                    withEditDetail = false;
+                }
+                else if(key === "欠產累積量")
+                {
+                    value = this.production_diff_acc(idx);
+                }
+                else if(key === "刪除欠產累積量")
+                {
+                    value = this.production_diff_acc(idx);
+                    remark = "delete";
+                    title.replace("修改", "刪除");
+                    isDelete = true;
+                }
+                else if(key === "出貨計畫累計數量")
+                {
+                    value = this.ship_target_acc(idx);
+                }
+                else if(key === "刪除出貨計畫累計數量")
+                {
+                    value = this.ship_target_acc(idx);
+                    remark = "delete";
+                    title.replace("修改", "刪除");
+                    isDelete = true;
+                }
+                else if(key === "實際出貨累積數量")
+                {
+                    value = this.ship_real_acc(idx);
+                }
+                else if(key === "刪除實際出貨累積數量")
+                {
+                    value = this.ship_target_acc(idx);
+                    remark = "delete";
+                    title.replace("修改", "刪除");
+                    isDelete = true;
+                }
+
+                this.editInfo = {
+                    title: title,
+                    idx: idx,
+                    date: this.dates[idx],
+                    key: key,
+                    value_record: value,
+                    value: value,
+                    creator: this.userInfo.preferred_username.toUpperCase(),
+                    remark: remark,
+                    withEditDetail: withEditDetail,
+                    isDelete: isDelete,
+                }
+                this.$bvModal.show('modal-edit-value');
+            },
+            editProcess: function(){
+                let saveReport = false;
+                let saveOffset = false;
+                let obj = {
+                    part_number: this.selectedPartNumber,
+                };
+
+                if(this.editInfo.key === "排定生產量")
+                {
+                    obj.production_target = this.editInfo.value;
+                    obj.search_date = this.editInfo.date;
+                    saveReport = true;
+                }
+                else if(this.editInfo.key === "出貨計畫數量")
+                {
+                    obj.ship_target = this.editInfo.value;
+                    obj.search_date = this.editInfo.date;
+                    saveReport = true;
+                }
+                else if(this.editInfo.key === "欠產累積量")
+                {
+                    obj.offset = this.editInfo.value;
+                    obj.date = this.editInfo.date;
+                    obj.offset_type = "production_real";
+                    obj.creator = this.editInfo.creator;
+                    obj.remark = this.editInfo.remark;
+                    obj.is_valid = true;
+                    saveOffset = true;
+                }
+                else if(this.editInfo.key === "刪除欠產累積量")
+                {
+                    obj.offset = this.editInfo.value;
+                    obj.date = this.editInfo.date;
+                    obj.offset_type = "production_real";
+                    obj.creator = this.editInfo.creator;
+                    obj.remark = this.editInfo.remark;
+                    obj.is_valid = false;
+                    saveOffset = true;
+                }
+                else if(this.editInfo.key === "出貨計畫累計數量")
+                {
+                    obj.offset = this.editInfo.value;
+                    obj.date = this.editInfo.date;
+                    obj.offset_type = "ship_target";
+                    obj.creator = this.editInfo.creator;
+                    obj.remark = this.editInfo.remark;
+                    obj.is_valid = true;
+                    saveOffset = true;
+                }
+                else if(this.editInfo.key === "刪除出貨計畫累計數量")
+                {
+                    obj.offset = this.editInfo.value;
+                    obj.date = this.editInfo.date;
+                    obj.offset_type = "ship_target";
+                    obj.creator = this.editInfo.creator;
+                    obj.remark = this.editInfo.remark;
+                    obj.is_valid = false;
+                    saveOffset = true;
+                }
+                else if(this.editInfo.key === "實際出貨累積數量")
+                {
+                    obj.offset = this.editInfo.value;
+                    obj.date = this.editInfo.date;
+                    obj.offset_type = "ship_real";
+                    obj.creator = this.editInfo.creator;
+                    obj.remark = this.editInfo.remark;
+                    obj.is_valid = true;
+                    saveOffset = true;
+                }
+                else if(this.editInfo.key === "刪除實際出貨累積數量")
+                {
+                    obj.offset = this.editInfo.value;
+                    obj.date = this.editInfo.date;
+                    obj.offset_type = "ship_real";
+                    obj.creator = this.editInfo.creator;
+                    obj.remark = this.editInfo.remark;
+                    obj.is_valid = false;
+                    saveOffset = true;
+                }
+                else
+                {
+                    console.log("error parameters: " + JSON.stringify(this.editInfo));
+                }
+
+                let url = "";
+                if(saveReport)
+                {
+                    url = "/api/manufacturing-plan/report";
+                }
+                else if(saveOffset)
+                {
+                    url = "/api/manufacturing-plan/offset";
+                }
+
+                fetch(url,{
+                    method: 'POST',
+                    body: JSON.stringify(obj),
+                })
+                .then((response) => {
+                    //console.log(response);
+                    return response.json();
+                })
+                .then( (response) => {
+                    this.toast((this.editInfo.isDelete?"刪除":"編輯")+this.editInfo.key, "寫入成功");
+                    this.searchProcess();
+                })
+                .catch((error) => {
+                    this.toast((this.editInfo.isDelete?"刪除":"編輯")+this.editInfo.key, `寫入異常: ${error}`);
+                });
+            },
+
+            toast(title, msg) {
+                this.$bvToast.toast(msg, {
+                    title: title,
+                    toaster: 'b-toaster-top-center',
+                    autoHideDelay: 2000,
+                    opacity: 1,
+                    appendToast: false,
+                })
+            },
+            
+            showChart(idx){
+                this.chartIdx = idx;
+
+                window.scrollTo({
+                    top: 0,
+                    behavior: 'smooth'
+                });
+                
+                if(this.chartVisible)
+                {
+                    this.drawChart();
+                }
+                else
+                {
+                    this.showChartZone();
+                }
+            },
+            onChartShown() {
+                //console.log('Collapse content is fully shown');
+                this.drawChart();
+            },
+            drawChart(){
+                let idx = this.chartIdx;
+                if(idx === -1)
+                {
+                    return;
+                }
+                if(this.chart1 === null)
+                {
+                    var ctx = this.$refs['chart1'].getContext('2d');
+                    this.chart1 = new Chart(ctx, {
+                        type: 'bar', //圖表類型
+                        options: {
+                            scales: {
+                                yAxes: [{
+                                        id: 'A',
+                                        type: 'linear',
+                                        position: 'left',
+                                        ticks: {
+                                            beginAtZero: true,
+                                            responsive: true //符合響應式
+                                        }
+                                    },{
+                                        id: 'B',
+                                        type: 'linear',
+                                        position: 'right',
+                                        ticks: {
+                                            beginAtZero: true,
+                                            responsive: true //符合響應式
+                                        }
+                                    },]
+                            },
+                            legend:{
+                                position: 'bottom',
+                            },
+                            layout:{
+                                padding:{
+                                    top: 50,
+                                }
+                            },
+                            responsive: false,
+                            maintainAspectRatio: false,
+                        }
+                    });
+                }
+                if(idx === 1)   //達成率
+                {
+                    this.chart1.data = {
+                        //標題
+                        labels: this.dateStrings,
+                        datasets: [{
+                            type: 'line', //圖表類型
+                            label: '達成率', //標籤
+                            yAxisID: 'B',
+                            data: this.achievement_rate_array(), //資料
+                            fill: false,
+                            borderColor: 'orange',
+                            pointBorderColor: "red", // blue point border
+                            pointBackgroundColor: "red", // wite point fill
+                            tension: 0,
+                            datalabels:{
+                                color: 'orange',
+                                anchor: 'end',
+                                align: 'end',
+                            }
+                        },{
+                            type: 'bar', //圖表類型
+                            label: '排定生產量', //標籤
+                            yAxisID: 'A',
+                            data: this.production_target_array(), //資料
+                            //圖表背景色
+                            backgroundColor: 'lightblue',
+                            //圖表外框線色
+                            borderColor: 'blue',
+                            //外框線寬度
+                            borderWidth: 1
+                        },{
+                            type: 'bar', //圖表類型
+                            label: '良品生產量', //標籤
+                            yAxisID: 'A',
+                            data: this.production_real_array(), //資料
+                            //圖表背景色
+                            backgroundColor: 'lightgreen',
+                            //圖表外框線色
+                            borderColor: 'green',
+                            //外框線寬度
+                            borderWidth: 1
+                        },]
+                    };
+                    this.chartTitle1 = " ─ " + this.selectedName + " 計畫達成率";
+                }
+                else if(idx === 2)  //累積出貨差異
+                {
+                    this.chart1.data = {
+                        //標題
+                        labels: this.dateStrings,
+                        datasets: [{
+                            type: 'line', //圖表類型
+                            label: '累積出貨差異', //標籤
+                            yAxisID: 'B',
+                            data: this.ship_diff_acc_array(), //資料
+                            fill: false,
+                            borderColor: 'orange',
+                            pointBorderColor: "red", // blue point border
+                            pointBackgroundColor: "red", // wite point fill
+                            tension: 0,
+                            datalabels:{
+                                color: 'orange',
+                                anchor: 'end',
+                                align: 'end',
+                            }
+                        },{
+                            type: 'bar', //圖表類型
+                            label: '出貨計畫數量', //標籤
+                            yAxisID: 'A',
+                            data: this.ship_target_array(), //資料
+                            //圖表背景色
+                            backgroundColor: 'lightblue',
+                            //圖表外框線色
+                            borderColor: 'blue',
+                            //外框線寬度
+                            borderWidth: 1
+                        },{
+                            type: 'bar', //圖表類型
+                            label: '實際出貨數量', //標籤
+                            yAxisID: 'A',
+                            data: this.ship_real_array(), //資料
+                            //圖表背景色
+                            backgroundColor: 'lightgreen',
+                            //圖表外框線色
+                            borderColor: 'green',
+                            //外框線寬度
+                            borderWidth: 1
+                        },]
+                    };
+                    this.chartTitle1 = " ─ " + this.selectedName + " 累計出貨變化";
+                }
+                else if(idx === 3)  //交貨狀況
+                {
+                    this.chart1.data = {
+                        //標題
+                        labels: this.dateStrings,
+                        datasets: [{
+                            type: 'line', //圖表類型
+                            label: '出貨計畫累計數量', //標籤
+                            yAxisID: 'A',
+                            data: this.ship_target_acc_array(), //資料
+                            fill: false,
+                            borderColor: 'orange',
+                            pointBorderColor: "red", // blue point border
+                            pointBackgroundColor: "red", // wite point fill
+                            tension: 0,
+                            datalabels:{
+                                color: 'orange',
+                                anchor: 'end',
+                                align: 'end',
+                            }
+                        },{
+                            type: 'line', //圖表類型
+                            label: '實際出貨累積數量', //標籤
+                            yAxisID: 'A',
+                            data: this.ship_real_acc_array(), //資料
+                            fill: false,
+                            borderColor: 'lightblue',
+                            pointBorderColor: "blue", // blue point border
+                            pointBackgroundColor: "blue", // wite point fill
+                            tension: 0,
+                            datalabels:{
+                                color: 'lightblue',
+                                anchor: 'end',
+                                align: 'end',
+                            }
+                        },{
+                            type: 'bar', //圖表類型
+                            label: '出貨累計差異', //標籤
+                            yAxisID: 'B',
+                            data: this.ship_diff_array(), //資料
+                            //圖表背景色
+                            backgroundColor: 'lightgreen',
+                            //圖表外框線色
+                            borderColor: 'green',
+                            //外框線寬度
+                            borderWidth: 1,
+                            datalabels:{
+                                color: 'green',
+                            }
+                        },]
+                    };
+                    this.chartTitle1 = " ─ " + this.selectedName + " 交貨狀況";
+                }
+                this.chart1.update();
+                //this.chart1.canvas.parentNode.style.height = window.innerHeight*0.35 + 'px'; 
+                //this.chart1.canvas.parentNode.style.width = window.innerWidth + 'px';
+            },
+            showScadaTable(date){
+                if(this.selectedLineID !== 0)
+                {
+                    window.open('http://mfg-datacenter.one-fit.com:31881/View/ScadaTable?' + 
+                    'lineID=' + this.selectedLineID + '&' +
+                    'searchDate=' + date + '&' +
+                    'classID=0');
+                }
+            },
+            reloadWithoutParams(){
+                const baseUrl = window.location.href.split('?')[0];
+                window.location.href = baseUrl;
+            },
+            isValidDate(str) {
+                const date = new Date(str);
+                return !isNaN(date) && !isNaN(date.getTime());
+            },
+            
+            showVersion(){
+                alert(this.versionHistory.join("\r\n"));
+            },
+
+            urlParams(key){
+                const urlSearchParams = new URLSearchParams(window.location.search);
+                return urlSearchParams.get(key) || '';
+            },
+            clonedObject(obj){
+                return JSON.parse(JSON.stringify(obj));
+            },
+            
+            updateUserAuth(authDict){
+                //console.log(authDict);
+                this.isEditAuthed = authDict.isEditAuthed;
+            },
+            updatePortal(isPortal)
+            {
+                this.isPortal = isPortal;
+            },
+            updateUser(userInfo){
+                this.userInfo = userInfo;
+            },
+        },
+        components:{
+            loginModule,
+            versionModule,
+        },
+    });
+    //}).mount("#ManufacturingPlan");
+</script>
+
+<style>
+    body {
+        background-color: #040c21;
+		color: #eeeeee;
+        font-size: 2.5vmin;
+    }
+
+    .page-title{
+        display: inline-block; 
+        margin: 0px; 
+        font-size: 3.2vmin; 
+        color:#a2d5f8; 
+    }
+
+    .header-logo{
+        float: left;
+        width: 5vw;
+        position: relative;
+        z-index: 2;
+        padding: 0.5vh 0.5vw;
+    }
+
+    
+
+    .chart-zone{
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        /*background-color: #040c21;*/
+    }
+    .chart-zone .chart {
+        height: 300px;
+    }
+
+    .manufacturing-zone{
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        background-color: #040c21;
+    }
+    .delivery-zone{
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        background-color: #040c21;
+    }
+    .material-zone{
+        width: 100%;
+        height: 50%;
+        display: flex;
+        justify-content: center;
+        overflow: auto;
+        background-color: #040c21;
+        align-items: flex-start;
+    }
+    .header {
+        width: 80vw;
+        height: 5vh;
+    }
+
+    .red_light_big {
+        width: 3vmin;
+        height: 3vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        background-color: #ff0000;
+
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 1.5vmin !important;
+        color: white;
+    }
+    .green_light_big {
+        width: 3vmin;
+        height: 3vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        background-color: #548235;
+
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 1.5vmin !important;
+        color: white;
+    }
+    .yellow_light_big {
+        width: 3vmin;
+        height: 3vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        background-color: #ffbf18;
+
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 1.5vmin !important;
+        color: white;
+    }
+    .red_light {
+        width: 2vmin;
+        height: 2vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        display: inline-block;
+        background-color: #ff0000;
+    }
+    .green_light {
+        width: 2vmin;
+        height: 2vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        display: inline-block;
+        background-color: #548235;
+    }
+    .orange_light {
+        width: 2vmin;
+        height: 2vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        display: inline-block;
+        background-color: orange;
+    }
+    .gray_light {
+        width: 2vmin;
+        height: 2vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        display: inline-block;
+        background-color: #595959;
+    }
+    .yellow_light {
+        width: 2vmin;
+        height: 2vmin;
+        border-radius: 50%;
+        margin-left: 10px;
+        display: inline-block;
+        background-color: #ffbf18;
+    }
+
+    .accordion{
+        --bs-accordion-btn-bg: #194d86;
+        --bs-accordion-btn-color: #fff;
+        --bs-accordion-active-bg: #1a62ae;
+        --bs-accordion-active-color: #fff;
+    }
+    .accordion-button-big-font{
+        font-size: 1.6vw;
+    }
+
+    
+    .title-bar {
+        padding-top: 1.9vh;
+        padding-bottom: 2.3vh;
+        justify-content: center;
+        display: flex;
+    }
+
+    .title-bar button {
+        color: #fff;
+        border-radius: 4px;
+        font-size: 1.6vmin;
+        padding: 0.5vh 1.6vw;
+        background: #1a62ae;
+        cursor: pointer;
+    }
+    .title-bar .save_button {
+        color: #fff;
+        border-radius: 4px;
+        font-size: 1.6vmin;
+        padding: 0.5vh 1.6vw;
+        background: #ffaf00;
+        cursor: pointer;
+    }
+    .title-bar .check_button {
+        color: #fff;
+        border-radius: 4px;
+        font-size: 1.6vmin;
+        padding: 0.5vh 1.6vw;
+        background: #167148;
+        cursor: pointer;
+    }
+    .title-bar .selected_button {
+        border-width: 0.3vmin;
+        border-color: #cfe2ff;
+    }
+    .title-bar select {
+        background-color: #599bd5;
+        border-radius: 4px;
+        color: #000;
+        font-size: inherit;
+        border: 1px solid hsla(0,0%,100%,0);
+        margin-left: 10px;
+        margin-right: 30px;
+        cursor: pointer;
+    }
+    .title-bar input {
+        color-scheme: dark;
+        background-color: #0f3b6f;
+		border: 1px solid hsla(0,0%,100%,0);
+		border-radius: 4px;
+		margin-left: 1vw;
+        margin-right: 1vw;
+		font-size: inherit;
+		text-align: center;
+    }
+    
+    .function-zone {
+        width: 100%;
+        height: 5.4vh;
+    }
+    .function-zone .show-columns-button {
+        color: #fff;
+        border-radius: 4px;
+        font-size: .9vw;
+        padding: 0.5vh 1.6vw;
+        background: #1a62ae;
+        position: absolute;
+        left: 5%;
+    }
+    .function-zone .show-invalid-button {
+        color: #fff;
+        border-radius: 4px;
+        font-size: .9vw;
+        padding: 0.5vh 1.6vw;
+        background: #1a62ae;
+        cursor: pointer;
+        position: absolute;
+        right: 5%;
+    }
+    .function-zone .valid-column{
+        background-color: #404040;
+        font-size: .5vw;
+        position: absolute;
+        width: 60%;
+        height: inherit;
+        left: 20%;
+    }
+    .function-zone .show-date{
+        position: absolute;
+        width: 60%;
+        height: inherit;
+        left: 20%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    
+    .data-table {
+        height: 70%;
+        overflow: auto;
+        display: flex;
+        align-items: flex-start;
+        margin-left: 5%;
+        margin-right: 5%;
+    }
+    .data-table-short {
+        height: 35%;
+        overflow: auto;
+        display: flex;
+        align-items: flex-start;
+        margin-left: 5%;
+        margin-right: 5%;
+    }
+
+    .fix-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+    .tg {
+        border-collapse: collapse;
+        border-spacing: 0;
+        width: 70%;
+    }
+    .tg tbody{
+        color: #fff;
+    }
+
+    .tg tr:nth-child(even) {
+        background-color: #0e2a52;
+    }
+    .tg tr:nth-child(odd) {
+        background-color: #05142f;
+    }
+
+    .tg td {
+        border-color: lightblue;
+        font-family: Arial, sans-serif;
+        font-size: 2vmin;
+        text-align: center;
+        padding: 1vmin 0.5vmin;
+        word-break: normal;
+    }
+    .red-font{
+        color: #b74b53;
+    }
+    .green-font{
+        color: #04be02;
+    }
+    .tg .title {
+        width: 25%;
+        text-align: left;
+    }
+    .table-button{
+        border-width: 0px;
+        padding: 0px;
+        background-color: inherit;
+        color: lightblue;
+        cursor: pointer;
+    }
+    .tg .title span {
+        font-size: 1.3rem;
+        vertical-align: middle;
+    }
+
+    .tg .material-title{
+        background-color: #05142f;
+        color: orange;
+        text-align: left;
+    }
+    .tg .material-quantity{
+        background-color: #0e2a52 !important;
+    }
+    .tg .material-day{
+        background-color: #2a5583 !important;
+        border-collapse: collapse !important;
+        border-width: 1px;
+        border-color: black;
+        border-style: none none solid none;
+    }
+
+    .btn-circle {
+        width: 30px;
+        height: 30px;
+        padding: 6px 0px;
+        border-radius: 15px;
+        text-align: center;
+        font-size: 12px;
+        line-height: 1.42857;
+    }
+
+    .tg input{
+        border-width: 0px;
+        padding: 0px;
+        width: 7vw;
+        background-color: inherit;
+        color: inherit;
+        text-align: center;
+    }
+    .tg .changed{
+        color: #ffaf00;
+    }
+    /* Chrome, Safari, Edge, Opera */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    /* Firefox 
+    input[type=number] {
+        -moz-appearance: textfield;
+    }*/
+
+    .tg th {
+        background-color: #194d86;
+        border-color: #0e2a52;
+        border-style: solid;
+        border-width: 0.1vmin;
+        white-space: pre-wrap;
+        font-family: Arial, sans-serif;
+        font-size: 2vmin;
+        font-weight: normal;
+        overflow: hidden;
+        padding: 1vmin 0.5vmin;
+        word-break: normal;
+        min-width: 7vmin;
+    }
+    .tg .red {
+        background-color: #ff0000;
+        border-style: solid solid solid none;
+        border-width: 0.1vmin;
+        border-color: white;
+        color: white;
+    }
+    .tg .green {
+        background-color: #00FF00;
+        border-style: solid solid solid none;
+        border-width: 0.1vmin;
+        border-color: white;
+    }
+    .tg .gray {
+        background-color: #cccccc;
+        border-style: solid solid solid none;
+        border-width: 0.1vmin;
+        border-color: white;
+    }
+
+    /* width */
+    ::-webkit-scrollbar {
+    width: 10px;
+    }
+
+    /* Track */
+    ::-webkit-scrollbar-track {
+    box-shadow: inset 0 0 5px grey; 
+    border-radius: 10px;
+    }
+    
+    /* Handle */
+    ::-webkit-scrollbar-thumb {
+    background: #1a62ae; 
+    border-radius: 10px;
+    }
+
+    /* Handle on hover */
+    ::-webkit-scrollbar-thumb:hover {
+    background: #599bd5; 
+    }
+
+    .mytooltip {
+        position: relative;
+    }
+
+    .pointer{
+        cursor: pointer;
+    }
+    .pointer:hover{
+        border-color: #4A78FF;
+        border-style: solid;
+        border-width: 2px;
+    }
+
+    .mytooltip .tooltiptext {
+        visibility: hidden;
+        position:absolute; 
+        z-index:100;
+        border:0.1vmin;
+        background-color:#194d86;
+        border-style:solid;
+        border-width:0.1vmin;
+        border-color:white;
+        padding:0.3vmin;
+        color:white; 
+        top:3vmin; 
+        left:2vmin;
+        width: 30vmin;
+        text-align: center;
+        opacity: 0.9;
+    }
+
+    .mytooltip:hover .tooltiptext {
+        visibility: visible;
+    }
+
+    .spanTextSmall {
+		color: #9dbfdb;
+		font-size: 1rem;
+	}
+
+    .bg-costom-modal {
+        background-color: white !important;
+        color: black !important;
+    }
+
+    .toast:not(.show) {
+        display: block;
+        color: #0d6efd;
+        background-color: white;
+    }
+    .toast-header{
+        justify-content: space-between;
+    }
+</style>
