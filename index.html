@@ -1091,6 +1091,14 @@
                     //this.setManufacturingList();
 
                     this.manufacturingList = response;
+
+                    //為了demo，客製一下日期
+                    this.manufacturingList.forEach((obj, idx)=>{
+                        const d = new Date(this.searchDate);
+                        d.setDate(d.getDate()+idx);
+                        obj["日期"] = d.toISOString().slice(0, 10);
+                    });
+
                     this.manufacturingListOrigin = this.clonedObject(response);
                     this.dates = response.map(x=>x["日期"]);//Object.keys(rawData);
 
