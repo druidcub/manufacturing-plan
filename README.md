@@ -13,8 +13,6 @@
 
 🔗 https://druidcub.github.io/manufacturing-plan/
 
-> 如無法開啟，請確認 GitHub Pages 是否已啟用。
-
 ## 功能特色
 
 ### 生產計畫查詢
